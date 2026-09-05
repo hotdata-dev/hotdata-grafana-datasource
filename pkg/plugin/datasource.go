@@ -157,7 +157,7 @@ func (d *Datasource) query(ctx context.Context, query backend.DataQuery) backend
 	if err != nil {
 		return errResponse(err)
 	}
-	defer body.Close()
+	defer func() { _ = body.Close() }()
 
 	frame, err := FrameFromArrowStream(body)
 	if err != nil {

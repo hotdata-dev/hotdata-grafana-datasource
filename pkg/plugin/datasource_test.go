@@ -59,7 +59,7 @@ func arrowFixture(t *testing.T) []byte {
 	bBld.Append(true)
 	bBld.Append(false)
 
-	rec := bld.NewRecord()
+	rec := bld.NewRecordBatch()
 	defer rec.Release()
 
 	var buf bytes.Buffer
