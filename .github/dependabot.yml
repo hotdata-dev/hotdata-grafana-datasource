@@ -34,6 +34,10 @@ updates:
         versions: ['>=10.0.0']
       - dependency-name: '@grafana/eslint-config'
         versions: ['>=10.0.0']
+      # typescript >=6 is outside @typescript-eslint's supported peer range
+      # (>=4.8.4 <6.1.0) and untested by the create-plugin toolchain.
+      - dependency-name: 'typescript'
+        versions: ['>=6.0.0']
     groups:
       unit-test:
         patterns:
