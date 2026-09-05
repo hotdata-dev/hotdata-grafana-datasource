@@ -196,7 +196,7 @@ jobs:
           exit 1
 
       - name: Wait for grafana server
-        uses: grafana/plugin-actions/wait-for-grafana@wait-for-grafana/v1.0.4
+        uses: grafana/plugin-actions/wait-for-grafana@wait-for-grafana/v1.0.5
         with:
           url: http://localhost:3000/login
 
