@@ -7,9 +7,11 @@ services:
       # Consumed by provisioning/datasources/datasources.yml.
       # Defaults point at the bundled mock API service below, so a fresh
       # `docker compose up` yields a working datasource and demo dashboard.
-      # To use a live workspace, set all four HOTDATA_* variables
-      # (an empty HOTDATA_API_URL falls back to https://api.hotdata.dev).
-      HOTDATA_API_URL: ${HOTDATA_API_URL:-http://mockapi:8999}
+      # To use a live workspace, set all four HOTDATA_* variables. The URL
+      # uses the ${VAR-default} form (substitute only when unset) so an
+      # explicitly empty HOTDATA_API_URL falls back to https://api.hotdata.dev
+      # rather than the mock.
+      HOTDATA_API_URL: ${HOTDATA_API_URL-http://mockapi:8999}
       HOTDATA_API_KEY: ${HOTDATA_API_KEY:-hd_mock}
       HOTDATA_WORKSPACE_ID: ${HOTDATA_WORKSPACE_ID:-workmock}
       HOTDATA_DATABASE_ID: ${HOTDATA_DATABASE_ID:-dbmock}

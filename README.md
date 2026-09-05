@@ -40,10 +40,10 @@ The mock implements the captured v1 wire contract (sync + async flows, Arrow res
 
 ### Run against a live workspace
 
-Set all four variables (an empty `HOTDATA_API_URL` falls back to `https://api.hotdata.dev`):
+Set all four variables. `HOTDATA_API_URL` must be exported — if left unset it defaults to the mock; an explicitly empty value falls back to `https://api.hotdata.dev`:
 
 ```bash
-export HOTDATA_API_URL=
+export HOTDATA_API_URL=                # empty = https://api.hotdata.dev
 export HOTDATA_API_KEY=hd_...          # workspace API key
 export HOTDATA_WORKSPACE_ID=work...
 export HOTDATA_DATABASE_ID=dbid...     # default database
