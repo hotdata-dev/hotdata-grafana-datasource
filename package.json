@@ -15,6 +15,10 @@
   },
   "author": "Hotdata",
   "license": "Apache-2.0",
+  "overrides": {
+    "dompurify": "^3.4.13",
+    "js-cookie": "^3.0.7"
+  },
   "devDependencies": {
     "@grafana/eslint-config": "^9.0.0",
     "@grafana/plugin-e2e": "^3.11.0",

@@ -5,11 +5,22 @@ services:
       service: grafana
     environment:
       # Consumed by provisioning/datasources/datasources.yml.
-      # HOTDATA_API_URL is only needed to point at a non-default API
-      # (e.g. http://host.docker.internal:8999 for `go run ./pkg/cmd/mockapi`).
-      HOTDATA_API_URL: ${HOTDATA_API_URL:-}
-      HOTDATA_API_KEY: ${HOTDATA_API_KEY:-}
-      HOTDATA_WORKSPACE_ID: ${HOTDATA_WORKSPACE_ID:-}
-      HOTDATA_DATABASE_ID: ${HOTDATA_DATABASE_ID:-}
+      # Defaults point at the bundled mock API service below, so a fresh
+      # `docker compose up` yields a working datasource and demo dashboard.
+      # To use a live workspace, set all four HOTDATA_* variables
+      # (an empty HOTDATA_API_URL falls back to https://api.hotdata.dev).
+      HOTDATA_API_URL: ${HOTDATA_API_URL:-http://mockapi:8999}
+      HOTDATA_API_KEY: ${HOTDATA_API_KEY:-hd_mock}
+      HOTDATA_WORKSPACE_ID: ${HOTDATA_WORKSPACE_ID:-workmock}
+      HOTDATA_DATABASE_ID: ${HOTDATA_DATABASE_ID:-dbmock}
     extra_hosts:
       - 'host.docker.internal:host-gateway'
+
+  mockapi:
+    build:
+      context: .
+      dockerfile: pkg/cmd/mockapi/Dockerfile
+    # Published on the host as well so the e2e config-editor test can reach it
+    # from the Grafana container via host.docker.internal:8999.
+    ports:
+      - 8999:8999/tcp

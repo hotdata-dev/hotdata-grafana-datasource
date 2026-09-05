@@ -130,17 +130,6 @@ jobs:
           path: ${{ steps.metadata.outputs.plugin-id }}
           retention-days: 5
 
-      - name: Build mock Hotdata API
-        if: steps.check-for-backend.outputs.has-backend == 'true'
-        run: go build -o mockapi ./pkg/cmd/mockapi
-
-      - name: Archive mock Hotdata API
-        if: steps.check-for-backend.outputs.has-backend == 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: mockapi
-          path: mockapi
-          retention-days: 5
 
   resolve-versions:
     name: Resolve e2e images
@@ -194,34 +183,17 @@ jobs:
       - name: Install dev dependencies
         run: npm ci
 
-      - name: Download mock Hotdata API
-        uses: actions/download-artifact@v8
-        with:
-          name: mockapi
-
-      - name: Start mock Hotdata API
+      - name: Start Grafana and mock Hotdata API
         run: |
-          chmod +x ./mockapi
-          nohup ./mockapi > mockapi.log 2>&1 &
+          docker compose pull --ignore-buildable
+          ANONYMOUS_AUTH_ENABLED=false DEVELOPMENT=false GRAFANA_VERSION=${{ matrix.GRAFANA_IMAGE.VERSION }} GRAFANA_IMAGE=${{ matrix.GRAFANA_IMAGE.NAME }} docker compose up -d --build
           for i in $(seq 1 30); do
             curl -sf http://localhost:8999/v1/databases > /dev/null && exit 0
             sleep 1
           done
           echo "mock API did not become ready" >&2
-          cat mockapi.log >&2
+          docker compose logs mockapi >&2
           exit 1
-
-      - name: Start Grafana
-        run: |
-          docker compose pull
-          ANONYMOUS_AUTH_ENABLED=false DEVELOPMENT=false GRAFANA_VERSION=${{ matrix.GRAFANA_IMAGE.VERSION }} GRAFANA_IMAGE=${{ matrix.GRAFANA_IMAGE.NAME }} docker compose up -d
-        env:
-          # Point the provisioned datasource at the mock API on the runner host
-          # (docker-compose maps host.docker.internal to the host gateway).
-          HOTDATA_API_URL: http://host.docker.internal:8999
-          HOTDATA_API_KEY: hd_mock
-          HOTDATA_WORKSPACE_ID: workmock
-          HOTDATA_DATABASE_ID: dbmock
 
       - name: Wait for grafana server
         uses: grafana/plugin-actions/wait-for-grafana@wait-for-grafana/v1.0.4

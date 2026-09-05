@@ -2,6 +2,11 @@
 
 Query [Hotdata](https://hotdata.dev) instant databases with SQL from Grafana dashboards, alerts, and template variables. Results transfer Arrow-native from Hotdata's engine into Grafana data frames, so column types survive end to end.
 
+## Requirements
+
+- Grafana 12.3 or later
+- A [Hotdata](https://hotdata.dev) workspace and API key
+
 ## Features
 
 - Raw SQL editor with completion for macros, tables, and columns from your workspace schema
