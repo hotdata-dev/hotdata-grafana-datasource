@@ -116,7 +116,7 @@ func (c *Client) RunQuery(ctx context.Context, databaseID, sql, dialect string) 
 	if err != nil {
 		return RunMeta{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var qr queryResponse
 	if err := json.NewDecoder(resp.Body).Decode(&qr); err != nil {
@@ -156,7 +156,7 @@ func (c *Client) pollRun(ctx context.Context, runID, databaseID string) (RunMeta
 		}
 		var st queryRunStatus
 		err = json.NewDecoder(resp.Body).Decode(&st)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if err != nil {
 			return RunMeta{}, fmt.Errorf("decoding query run status: %w", err)
 		}
@@ -206,7 +206,7 @@ func (c *Client) FetchResultArrow(ctx context.Context, resultID, databaseID stri
 		// Not arrow yet — a JSON status placeholder. Read the body so an
 		// unrecognized shape becomes an error rather than an endless poll.
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		var st struct {
 			Status  string `json:"status"`
 			Error   string `json:"error"`
@@ -251,7 +251,7 @@ func (c *Client) ListDatabases(ctx context.Context) ([]Database, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var out struct {
 		Databases []Database `json:"databases"`
 	}
@@ -268,7 +268,7 @@ func (c *Client) GetDatabase(ctx context.Context, id string) (DatabaseDetail, er
 	if err != nil {
 		return DatabaseDetail{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var out DatabaseDetail
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return DatabaseDetail{}, fmt.Errorf("decoding database: %w", err)
@@ -293,7 +293,7 @@ func (c *Client) InformationSchema(ctx context.Context, connectionID, schema, ta
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var out struct {
 		Tables []Table `json:"tables"`
 	}
@@ -308,7 +308,7 @@ func (c *Client) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var out struct {
 		Workspaces []Workspace `json:"workspaces"`
 	}
@@ -368,7 +368,7 @@ func (c *Client) do(ctx context.Context, method, path, databaseID string, body a
 				delay = time.Duration(ra) * time.Second
 			}
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
@@ -379,7 +379,7 @@ func (c *Client) do(ctx context.Context, method, path, databaseID string, body a
 
 		if resp.StatusCode >= 400 {
 			snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil, &APIError{StatusCode: resp.StatusCode, Body: string(snippet)}
 		}
 		return resp, nil

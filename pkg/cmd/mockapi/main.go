@@ -137,7 +137,7 @@ func writeSeries(w http.ResponseWriter) error {
 		}
 	}
 
-	rec := bld.NewRecord()
+	rec := bld.NewRecordBatch()
 	defer rec.Release()
 
 	ipcW := ipc.NewWriter(w, ipc.WithSchema(schema), ipc.WithAllocator(pool))

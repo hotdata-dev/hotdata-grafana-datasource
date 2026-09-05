@@ -35,7 +35,7 @@ func FrameFromArrowStream(r io.Reader) (*data.Frame, error) {
 	}
 
 	for rdr.Next() {
-		rec := rdr.Record()
+		rec := rdr.RecordBatch()
 		for i := range fields {
 			if err := appenders[i](rec.Column(i)); err != nil {
 				return nil, fmt.Errorf("column %q: %w", schema.Field(i).Name, err)
