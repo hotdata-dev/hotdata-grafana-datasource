@@ -1,0 +1,30 @@
+{
+  "$schema": "https://raw.githubusercontent.com/grafana/grafana/main/docs/sources/developers/plugins/plugin.schema.json",
+  "type": "datasource",
+  "name": "Hotdata",
+  "id": "hotdata-hotdata-datasource",
+  "metrics": true,
+  "backend": true,
+  "alerting": true,
+  "annotations": true,
+  "executable": "gpx_hotdata",
+  "info": {
+    "description": "Query Hotdata instant databases with SQL. Arrow-native results, alerting, and template variables.",
+    "author": {
+      "name": "Hotdata"
+    },
+    "keywords": ["datasource", "sql", "hotdata", "arrow", "olap"],
+    "logos": {
+      "small": "img/logo.svg",
+      "large": "img/logo.svg"
+    },
+    "links": [{ "name": "Website", "url": "https://hotdata.dev" }],
+    "screenshots": [{ "name": "Dashboard with Hotdata queries", "path": "img/screenshot-dashboard.png" }],
+    "version": "%VERSION%",
+    "updated": "%TODAY%"
+  },
+  "dependencies": {
+    "grafanaDependency": ">=12.3.0",
+    "plugins": []
+  }
+}

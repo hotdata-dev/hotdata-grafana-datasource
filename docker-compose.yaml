@@ -1,0 +1,15 @@
+services:
+  grafana:
+    extends:
+      file: .config/docker-compose-base.yaml
+      service: grafana
+    environment:
+      # Consumed by provisioning/datasources/datasources.yml.
+      # HOTDATA_API_URL is only needed to point at a non-default API
+      # (e.g. http://host.docker.internal:8999 for `go run ./pkg/cmd/mockapi`).
+      HOTDATA_API_URL: ${HOTDATA_API_URL:-}
+      HOTDATA_API_KEY: ${HOTDATA_API_KEY:-}
+      HOTDATA_WORKSPACE_ID: ${HOTDATA_WORKSPACE_ID:-}
+      HOTDATA_DATABASE_ID: ${HOTDATA_DATABASE_ID:-}
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'

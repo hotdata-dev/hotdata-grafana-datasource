@@ -1,0 +1,39 @@
+{
+  "uid": "hotdata-demo",
+  "title": "Hotdata demo",
+  "tags": ["hotdata"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": { "from": "now-2h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "service values (bucketed by $__timeGroup)",
+      "gridPos": { "x": 0, "y": 0, "w": 16, "h": 9 },
+      "datasource": { "type": "hotdata-hotdata-datasource", "uid": "hotdata" },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT ts, service, value FROM metrics WHERE $__timeFilter(ts)",
+          "format": "timeseries"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "raw rows",
+      "gridPos": { "x": 16, "y": 0, "w": 8, "h": 9 },
+      "datasource": { "type": "hotdata-hotdata-datasource", "uid": "hotdata" },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT ts, service, value FROM metrics LIMIT 20",
+          "format": "table"
+        }
+      ]
+    }
+  ]
+}

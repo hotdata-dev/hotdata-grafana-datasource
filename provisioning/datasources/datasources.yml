@@ -1,0 +1,19 @@
+apiVersion: 1
+
+datasources:
+  - name: 'Hotdata'
+    uid: 'hotdata'
+    type: 'hotdata-hotdata-datasource'
+    access: proxy
+    isDefault: true
+    orgId: 1
+    version: 1
+    editable: true
+    jsonData:
+      # Empty falls back to https://api.hotdata.dev
+      apiUrl: '$HOTDATA_API_URL'
+      workspaceId: '$HOTDATA_WORKSPACE_ID'
+      defaultDatabaseId: '$HOTDATA_DATABASE_ID'
+      defaultDialect: 'postgres'
+    secureJsonData:
+      apiKey: '$HOTDATA_API_KEY'
