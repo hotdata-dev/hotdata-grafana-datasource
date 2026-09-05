@@ -1,58 +1,73 @@
 # Hotdata datasource for Grafana
 
-Grafana backend datasource plugin for [Hotdata](https://hotdata.dev). Runs SQL against Hotdata instant databases and returns results Arrow-native — the plugin decodes the query result's Arrow IPC stream straight into Grafana data frames, so types survive end to end.
+Query [Hotdata](https://hotdata.dev) instant databases with SQL from Grafana dashboards, alerts, and template variables.
 
-Design and wire contract: [SPEC.md](./SPEC.md).
+![Dashboard with Hotdata queries](src/img/screenshot-dashboard.png)
 
-## Status
+## Features
 
-M1–M3 complete (see [SPEC.md](./SPEC.md) milestones); M4 remaining item is catalog submission.
+- **SQL editor** with autocomplete for your workspace's tables, columns, and Grafana macros
+- **Table and time-series panels** — long results pivot to one series per label automatically
+- **Alerting** — queries run in the plugin backend, so alert rules work out of the box
+- **Template variables** — populate dashboard variables from SQL queries
+- **Your dialect** — write HotSQL (native), PostgreSQL, DuckDB, or Snowflake SQL
+- **Fast and type-faithful** — results stream Arrow-native from Hotdata into Grafana, so numeric precision and timestamps survive end to end
 
-- Config editor: API URL, API key (encrypted), workspace ID, default database, default dialect.
-- Query editor: SQL editor with completion (macros, tables, columns via the schema resources), database picker, format (table / time series), per-query dialect override.
-- Sync and async query flows (`POST /v1/query` → 202 → poll `GET /v1/query-runs/{id}`), 429 retry with `Retry-After`.
-- Arrow IPC → data frame conversion for ints, floats, decimals, strings, bools, timestamps, dates, binary; nested types render as strings.
-- Macros: `$__timeFilter(col)`, `$__timeFrom()`, `$__timeTo()`, `$__timeGroup(col, interval)` (via `date_bin`), `$__interval`, `$__interval_ms`.
-- `format: timeseries` long→wide conversion for multi-series panels.
-- Health check that validates key + workspace and warms the workspace worker.
-- Alerting verified end-to-end (rule on plugin query → firing instances with per-series labels).
-- Resource endpoints: `databases`, `workspaces`, `schemas`, `tables`, `columns`.
-- Provisioned demo dashboard (`provisioning/dashboards/hotdata-demo.json`).
+## Installation
+
+Download the latest release zip from the [releases page](https://github.com/hotdata-dev/hotdata-grafana-datasource/releases) and extract it into your Grafana plugins directory, or install via Docker:
+
+```bash
+GF_INSTALL_PLUGINS="<release-zip-url>;hotdata-hotdata-datasource"
+```
+
+Until the plugin is published in the Grafana catalog, releases are unsigned — allow it explicitly:
+
+```ini
+[plugins]
+allow_loading_unsigned_plugins = hotdata-hotdata-datasource
+```
+
+Requires Grafana 12.3 or later.
+
+## Getting started
+
+1. In Grafana, go to **Connections → Data sources → Add data source** and pick **Hotdata**.
+2. Enter your workspace API key (`hd_…`), workspace ID, and a default database, then **Save & test**.
+3. Add a panel, write SQL, and use the macros below for time-range-aware queries:
+
+```sql
+SELECT $__timeGroup(created_at, $__interval) AS time,
+       status,
+       count(*) AS orders
+FROM shop.public.orders
+WHERE $__timeFilter(created_at)
+GROUP BY 1, 2
+ORDER BY 1
+```
+
+| Macro | Meaning |
+|---|---|
+| `$__timeFilter(col)` | limit `col` to the dashboard time range |
+| `$__timeFrom()` / `$__timeTo()` | the range bounds as literals |
+| `$__timeGroup(col, interval)` | bucket `col` for time series |
+| `$__interval` / `$__interval_ms` | the panel's interval |
+
+Set the query format to **Time series** to get one series per label column. Full configuration and usage reference: [plugin README](src/README.md).
+
+## Try it without an account
+
+`docker compose up -d` starts Grafana plus a bundled mock of the Hotdata API, provisioned with a working datasource and demo dashboard — no credentials needed. Open http://localhost:3000.
 
 ## Development
 
 ```bash
 npm install
-npm run dev                 # frontend, watch mode
-mage -v build:linuxARM64    # backend (for the docker Grafana; use build:darwinARM64 for local go tests)
+npm run dev              # frontend, watch mode
+mage buildAll            # backend binaries into dist/
+docker compose up -d     # Grafana + mock API (see above)
 ```
 
-### Run (no credentials needed)
+To develop against a live workspace, export `HOTDATA_API_URL` (empty = `https://api.hotdata.dev`), `HOTDATA_API_KEY`, `HOTDATA_WORKSPACE_ID`, and `HOTDATA_DATABASE_ID` before `docker compose up`. `HOTDATA_API_URL` must be exported — if left unset it defaults to the mock.
 
-`docker compose up` starts Grafana **and** the bundled mock Hotdata API, with the provisioned datasource pointing at the mock — the demo dashboard works out of the box.
-
-```bash
-docker compose up -d
-open http://localhost:3000
-```
-
-The mock implements the captured v1 wire contract (sync + async flows, Arrow results, discovery) and serves a demo time series. SQL containing the word `slow` exercises the async path.
-
-### Run against a live workspace
-
-Set all four variables. `HOTDATA_API_URL` must be exported — if left unset it defaults to the mock; an explicitly empty value falls back to `https://api.hotdata.dev`:
-
-```bash
-export HOTDATA_API_URL=                # empty = https://api.hotdata.dev
-export HOTDATA_API_KEY=hd_...          # workspace API key
-export HOTDATA_WORKSPACE_ID=work...
-export HOTDATA_DATABASE_ID=dbid...     # default database
-docker compose up -d
-```
-
-### Tests
-
-```bash
-go test ./...            # backend: contract fixtures, arrow decode, macros, health
-npm run e2e              # Playwright against the running docker Grafana + mock API
-```
+Tests: `go test ./...` (backend) and `npm run e2e` (Playwright against the compose stack). Design notes and the wire contract live in [SPEC.md](SPEC.md).
