@@ -27,24 +27,26 @@ npm run dev                 # frontend, watch mode
 mage -v build:linuxARM64    # backend (for the docker Grafana; use build:darwinARM64 for local go tests)
 ```
 
-### Run against a live workspace
+### Run (no credentials needed)
+
+`docker compose up` starts Grafana **and** the bundled mock Hotdata API, with the provisioned datasource pointing at the mock — the demo dashboard works out of the box.
 
 ```bash
-export HOTDATA_API_KEY=hd_...          # workspace API key
-export HOTDATA_WORKSPACE_ID=work...
-export HOTDATA_DATABASE_ID=dbid...     # default database
 docker compose up -d
 open http://localhost:3000
 ```
 
-### Run against the bundled mock API (no credentials)
-
 The mock implements the captured v1 wire contract (sync + async flows, Arrow results, discovery) and serves a demo time series. SQL containing the word `slow` exercises the async path.
 
+### Run against a live workspace
+
+Set all four variables. `HOTDATA_API_URL` must be exported — if left unset it defaults to the mock; an explicitly empty value falls back to `https://api.hotdata.dev`:
+
 ```bash
-go run ./pkg/cmd/mockapi &             # listens on :8999
-export HOTDATA_API_URL=http://host.docker.internal:8999
-export HOTDATA_API_KEY=hd_mock HOTDATA_WORKSPACE_ID=workmock HOTDATA_DATABASE_ID=dbmock
+export HOTDATA_API_URL=                # empty = https://api.hotdata.dev
+export HOTDATA_API_KEY=hd_...          # workspace API key
+export HOTDATA_WORKSPACE_ID=work...
+export HOTDATA_DATABASE_ID=dbid...     # default database
 docker compose up -d
 ```
 
