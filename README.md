@@ -71,3 +71,7 @@ docker compose up -d     # Grafana + mock API (see above)
 To develop against a live workspace, export `HOTDATA_API_URL` (empty = `https://api.hotdata.dev`), `HOTDATA_API_KEY`, `HOTDATA_WORKSPACE_ID`, and `HOTDATA_DATABASE_ID` before `docker compose up`. `HOTDATA_API_URL` must be exported — if left unset it defaults to the mock.
 
 Tests: `go test ./...` (backend) and `npm run e2e` (Playwright against the compose stack). Design notes and the wire contract live in [SPEC.md](SPEC.md).
+
+### Releasing
+
+Merge a PR that bumps the version in `package.json` and adds a `CHANGELOG.md` entry, then run `./scripts/tag-release.sh`. It tags `v<version>` at `origin/main`, waits for the release workflow, publishes the release, and prints the zip URL and SHA1.
