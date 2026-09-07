@@ -18,14 +18,14 @@ Query [Hotdata](https://hotdata.dev) instant databases with SQL from Grafana das
 Download the latest release zip from the [releases page](https://github.com/hotdata-dev/hotdata-grafana-datasource/releases) and extract it into your Grafana plugins directory, or install via Docker:
 
 ```bash
-GF_INSTALL_PLUGINS="<release-zip-url>;hotdata-hotdata-datasource"
+GF_INSTALL_PLUGINS="<release-zip-url>;hotdata-sql-datasource"
 ```
 
 Until the plugin is published in the Grafana catalog, releases are unsigned — allow it explicitly:
 
 ```ini
 [plugins]
-allow_loading_unsigned_plugins = hotdata-hotdata-datasource
+allow_loading_unsigned_plugins = hotdata-sql-datasource
 ```
 
 Requires Grafana 12.3 or later.

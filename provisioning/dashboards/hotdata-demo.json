@@ -12,7 +12,7 @@
       "type": "timeseries",
       "title": "service values (bucketed by $__timeGroup)",
       "gridPos": { "x": 0, "y": 0, "w": 16, "h": 9 },
-      "datasource": { "type": "hotdata-hotdata-datasource", "uid": "hotdata" },
+      "datasource": { "type": "hotdata-sql-datasource", "uid": "hotdata" },
       "targets": [
         {
           "refId": "A",
@@ -26,7 +26,7 @@
       "type": "table",
       "title": "raw rows",
       "gridPos": { "x": 16, "y": 0, "w": 8, "h": 9 },
-      "datasource": { "type": "hotdata-hotdata-datasource", "uid": "hotdata" },
+      "datasource": { "type": "hotdata-sql-datasource", "uid": "hotdata" },
       "targets": [
         {
           "refId": "A",

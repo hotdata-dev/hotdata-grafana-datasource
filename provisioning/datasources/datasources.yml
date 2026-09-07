@@ -3,7 +3,7 @@ apiVersion: 1
 datasources:
   - name: 'Hotdata'
     uid: 'hotdata'
-    type: 'hotdata-hotdata-datasource'
+    type: 'hotdata-sql-datasource'
     access: proxy
     isDefault: true
     orgId: 1
