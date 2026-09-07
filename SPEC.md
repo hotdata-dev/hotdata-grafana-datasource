@@ -1,6 +1,6 @@
 # Hotdata for Grafana — datasource plugin spec
 
-**Plugin ID:** `hotdata-hotdata-datasource` · **Status:** M1–M3 implemented and verified; M4 pending catalog submission · **Date:** 2026-09-04
+**Plugin ID:** `hotdata-sql-datasource` · **Status:** M1–M3 implemented and verified; M4 pending catalog submission · **Date:** 2026-09-04
 **API contract verified against** `api.hotdata.dev/v1` via CLI 0.31.0 wire captures.
 
 ## 1. Overview
@@ -164,7 +164,7 @@ Dashboard variables use Grafana's standard frontend interpolation (`$var`, `${va
 {
   "type": "datasource",
   "name": "Hotdata",
-  "id": "hotdata-hotdata-datasource",
+  "id": "hotdata-sql-datasource",
   "backend": true,
   "executable": "gpx_hotdata",
   "alerting": true,

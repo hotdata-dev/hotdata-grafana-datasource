@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/grafana/grafana/main/docs/sources/developers/plugins/plugin.schema.json",
   "type": "datasource",
   "name": "Hotdata",
-  "id": "hotdata-hotdata-datasource",
+  "id": "hotdata-sql-datasource",
   "metrics": true,
   "backend": true,
   "alerting": true,

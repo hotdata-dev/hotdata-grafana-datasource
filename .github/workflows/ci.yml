@@ -210,7 +210,7 @@ jobs:
       - name: Docker logs
         if: ${{ always() && steps.run-tests.outcome == 'failure' }}
         run: |
-          docker logs hotdata-hotdata-datasource >& grafana-server.log
+          docker logs hotdata-sql-datasource >& grafana-server.log
           docker compose logs mockapi
 
       - name: Stop grafana docker
