@@ -14,7 +14,11 @@ set -euo pipefail
 REPO="hotdata-dev/hotdata-grafana-datasource"
 PLUGIN_ID="hotdata-sql-datasource"
 PUBLISH=true
-[ "${1:-}" = "--no-publish" ] && PUBLISH=false
+case "${1:-}" in
+  '') ;;
+  --no-publish) PUBLISH=false ;;
+  *) echo "error: unknown argument '${1}' (only --no-publish is supported)" >&2; exit 1 ;;
+esac
 
 command -v gh >/dev/null || { echo "error: gh CLI is required" >&2; exit 1; }
 
@@ -38,8 +42,13 @@ git tag "$TAG" origin/main
 git push origin "$TAG"
 
 echo "Waiting for the release workflow ..."
-sleep 20
-RUN_ID=$(gh run list --repo "$REPO" --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId')
+RUN_ID=""
+for _ in $(seq 1 24); do
+  RUN_ID=$(gh run list --repo "$REPO" --workflow release.yml --branch "$TAG" --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+  [ -n "$RUN_ID" ] && break
+  sleep 5
+done
+[ -n "$RUN_ID" ] || { echo "error: no release workflow run appeared for $TAG after 2 minutes" >&2; exit 1; }
 gh run watch "$RUN_ID" --repo "$REPO" --exit-status >/dev/null || {
   echo "error: release workflow failed — see gh run view $RUN_ID --repo $REPO" >&2
   exit 1
@@ -54,4 +63,4 @@ else
 fi
 
 echo "zip:  $ZIP_URL"
-echo "sha1: $(curl -sL "$ZIP_URL.sha1" || echo '<publish the release to fetch>')"
+echo "sha1: $(curl -sfL "$ZIP_URL.sha1" || echo '<publish the release to fetch>')"
