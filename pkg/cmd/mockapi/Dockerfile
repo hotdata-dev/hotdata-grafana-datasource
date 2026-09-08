@@ -1,6 +1,6 @@
 # Build the mock Hotdata API used for local development, e2e tests, and
 # plugin review. Build context is the repository root.
-FROM golang:1.26-alpine AS build
+FROM golang:1.27-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
