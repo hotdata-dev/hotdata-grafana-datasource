@@ -13,17 +13,24 @@ import (
 	"github.com/grafana/grafana-plugin-sdk-go/data"
 )
 
+// MaxResultRows caps how many rows a single query result may accumulate in
+// memory. Reading stops at the first record batch that reaches the cap, so a
+// runaway SELECT cannot exhaust the plugin process; the caller surfaces the
+// truncation to the user.
+const MaxResultRows = 1_000_000
+
 // FrameFromArrowStream decodes an Arrow IPC stream (as served by
-// GET /v1/results/{id}?format=arrow) into a single Grafana data frame.
+// GET /v1/results/{id}?format=arrow) into a single Grafana data frame. The
+// boolean reports whether the result was truncated at MaxResultRows.
 //
 // Hotdata's engine reports Arrow types directly (Utf8View, Int64, Float64,
 // Timestamp, ...), so this mapping is the plugin's single source of type
 // truth — the inline JSON preview from POST /v1/query is untyped and never
 // used for data.
-func FrameFromArrowStream(r io.Reader) (*data.Frame, error) {
+func FrameFromArrowStream(r io.Reader) (*data.Frame, bool, error) {
 	rdr, err := ipc.NewReader(r)
 	if err != nil {
-		return nil, fmt.Errorf("opening arrow stream: %w", err)
+		return nil, false, fmt.Errorf("opening arrow stream: %w", err)
 	}
 	defer rdr.Release()
 
@@ -34,19 +41,28 @@ func FrameFromArrowStream(r io.Reader) (*data.Frame, error) {
 		fields[i], appenders[i] = newFieldAppender(f)
 	}
 
+	rows := int64(0)
+	truncated := false
 	for rdr.Next() {
 		rec := rdr.RecordBatch()
 		for i := range fields {
 			if err := appenders[i](rec.Column(i)); err != nil {
-				return nil, fmt.Errorf("column %q: %w", schema.Field(i).Name, err)
+				return nil, false, fmt.Errorf("column %q: %w", schema.Field(i).Name, err)
 			}
+		}
+		if rows += rec.NumRows(); rows >= MaxResultRows {
+			// Whole batches are appended, so nothing was dropped yet even if the
+			// crossing batch overshot the cap; the result is truncated only when
+			// further batches remain unread.
+			truncated = rdr.Next()
+			break
 		}
 	}
 	if err := rdr.Err(); err != nil && err != io.EOF {
-		return nil, fmt.Errorf("reading arrow stream: %w", err)
+		return nil, false, fmt.Errorf("reading arrow stream: %w", err)
 	}
 
-	return data.NewFrame("", fields...), nil
+	return data.NewFrame("", fields...), truncated, nil
 }
 
 // newFieldAppender returns a nullable Grafana field for an Arrow schema field

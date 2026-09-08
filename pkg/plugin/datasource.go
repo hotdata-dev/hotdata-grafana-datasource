@@ -93,12 +93,18 @@ type queryModel struct {
 	Dialect    string `json:"dialect"`
 }
 
+// maxConcurrentQueries bounds per-request parallelism so a dashboard with many
+// panels cannot flood the workspace with simultaneous queries (each of which
+// would poll and retry independently).
+const maxConcurrentQueries = 10
+
 func (d *Datasource) QueryData(ctx context.Context, req *backend.QueryDataRequest) (*backend.QueryDataResponse, error) {
 	response := backend.NewQueryDataResponse()
 
 	var (
-		wg sync.WaitGroup
-		mu sync.Mutex
+		wg  sync.WaitGroup
+		mu  sync.Mutex
+		sem = make(chan struct{}, maxConcurrentQueries)
 	)
 	for _, q := range req.Queries {
 		wg.Add(1)
@@ -115,6 +121,16 @@ func (d *Datasource) QueryData(ctx context.Context, req *backend.QueryDataReques
 					mu.Unlock()
 				}
 			}()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				mu.Lock()
+				response.Responses[q.RefID] = backend.ErrDataResponse(
+					backend.StatusTimeout, ctx.Err().Error())
+				mu.Unlock()
+				return
+			}
 			res := d.query(ctx, q)
 			mu.Lock()
 			response.Responses[q.RefID] = res
@@ -159,7 +175,7 @@ func (d *Datasource) query(ctx context.Context, query backend.DataQuery) backend
 	}
 	defer func() { _ = body.Close() }()
 
-	frame, err := FrameFromArrowStream(body)
+	frame, truncated, err := FrameFromArrowStream(body)
 	if err != nil {
 		return backend.ErrDataResponse(backend.StatusInternal, fmt.Sprintf("decoding result: %v", err))
 	}
@@ -172,13 +188,26 @@ func (d *Datasource) query(ctx context.Context, query backend.DataQuery) backend
 			"executionTimeMs": meta.ExecutionTimeMS,
 		},
 	}
-
 	if qm.Format == "timeseries" {
 		if wide, err := data.LongToWide(frame, nil); err == nil {
 			frame = wide
+		} else {
+			// Fall through with the long frame (panels handle most shapes), but
+			// surface why the conversion failed — e.g. unsorted time column.
+			frame.Meta.Notices = append(frame.Meta.Notices, data.Notice{
+				Severity: data.NoticeSeverityWarning,
+				Text:     fmt.Sprintf("Time series conversion failed (returning long format): %v", err),
+			})
 		}
-		// On conversion failure (no time column, unsorted, already wide),
-		// fall through with the long frame — panels handle most shapes.
+	}
+
+	// Attached after the time-series conversion so the notice survives even if
+	// a future SDK version stops carrying Meta over to the wide frame.
+	if truncated {
+		frame.Meta.Notices = append(frame.Meta.Notices, data.Notice{
+			Severity: data.NoticeSeverityWarning,
+			Text:     fmt.Sprintf("Result truncated at %d rows — narrow the query.", MaxResultRows),
+		})
 	}
 
 	return backend.DataResponse{Frames: data.Frames{frame}}

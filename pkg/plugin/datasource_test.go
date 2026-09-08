@@ -74,10 +74,12 @@ func arrowFixture(t *testing.T) []byte {
 }
 
 type serverOpts struct {
-	async          bool
-	pollsNeeded    int32
-	rateLimit      bool
-	resultNotReady int32 // fetches that return a JSON "processing" placeholder first
+	async           bool
+	pollsNeeded     int32
+	rateLimit       bool
+	resultNotReady  int32         // fetches that return a JSON "processing" placeholder first
+	postUnavailable bool          // POST /v1/query answers 503 (never retryable: could re-run SQL)
+	postCount       *atomic.Int32 // when set, counts POST /v1/query requests
 }
 
 // newContractServer serves the captured Hotdata v1 wire contract.
@@ -89,6 +91,14 @@ func newContractServer(t *testing.T, opts serverOpts) (*httptest.Server, *atomic
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/query", func(w http.ResponseWriter, r *http.Request) {
+		if opts.postCount != nil {
+			opts.postCount.Add(1)
+		}
+		if opts.postUnavailable {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":"WORKER_UNAVAILABLE"}`))
+			return
+		}
 		if r.Header.Get("Authorization") != "Bearer test-key" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
@@ -211,6 +221,22 @@ func runQuery(t *testing.T, ds *Datasource, queryJSON string) backend.DataRespon
 	return resp.Responses["A"]
 }
 
+// A 503 on POST /v1/query must never be retried: the response may have been
+// lost after the SQL executed, so a retry could run the statement twice.
+func TestNoRetryOnQueryPostUnavailable(t *testing.T) {
+	posts := &atomic.Int32{}
+	srv, _ := newContractServer(t, serverOpts{postUnavailable: true, postCount: posts})
+	ds := newTestDatasource(srv)
+
+	res := runQuery(t, ds, `{"rawSql":"SELECT 1"}`)
+	if res.Error == nil {
+		t.Fatal("expected an error when POST /v1/query answers 503")
+	}
+	if got := posts.Load(); got != 1 {
+		t.Fatalf("POST /v1/query sent %d times, want exactly 1 (no retry on 503)", got)
+	}
+}
+
 func assertFixtureFrame(t *testing.T, res backend.DataResponse) {
 	t.Helper()
 	if res.Error != nil {
@@ -312,7 +338,7 @@ func TestMacros(t *testing.T) {
 		To:   time.Date(2026, 9, 4, 12, 30, 0, 0, time.UTC),
 	}
 	got := interpolateMacros(`SELECT * FROM t WHERE $__timeFilter(created_at) AND x > $__timeFrom()`, tr, time.Minute)
-	want := `SELECT * FROM t WHERE created_at >= '2026-09-01T00:00:00Z' AND created_at <= '2026-09-04T12:30:00Z' AND x > '2026-09-01T00:00:00Z'`
+	want := `SELECT * FROM t WHERE (created_at >= '2026-09-01T00:00:00Z' AND created_at <= '2026-09-04T12:30:00Z') AND x > '2026-09-01T00:00:00Z'`
 	if got != want {
 		t.Errorf("macros:\n got  %s\n want %s", got, want)
 	}
@@ -363,7 +389,7 @@ func TestMacrosNestedArgs(t *testing.T) {
 		},
 		{
 			`WHERE $__timeFilter(coalesce(a, b))`,
-			`WHERE coalesce(a, b) >= '2026-09-01T00:00:00Z' AND coalesce(a, b) <= '2026-09-04T00:00:00Z'`,
+			`WHERE (coalesce(a, b) >= '2026-09-01T00:00:00Z' AND coalesce(a, b) <= '2026-09-04T00:00:00Z')`,
 		},
 	}
 	for _, c := range cases {
