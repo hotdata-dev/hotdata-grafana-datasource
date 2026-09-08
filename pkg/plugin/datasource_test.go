@@ -312,7 +312,7 @@ func TestMacros(t *testing.T) {
 		To:   time.Date(2026, 9, 4, 12, 30, 0, 0, time.UTC),
 	}
 	got := interpolateMacros(`SELECT * FROM t WHERE $__timeFilter(created_at) AND x > $__timeFrom()`, tr, time.Minute)
-	want := `SELECT * FROM t WHERE created_at >= '2026-09-01T00:00:00Z' AND created_at <= '2026-09-04T12:30:00Z' AND x > '2026-09-01T00:00:00Z'`
+	want := `SELECT * FROM t WHERE (created_at >= '2026-09-01T00:00:00Z' AND created_at <= '2026-09-04T12:30:00Z') AND x > '2026-09-01T00:00:00Z'`
 	if got != want {
 		t.Errorf("macros:\n got  %s\n want %s", got, want)
 	}
@@ -363,7 +363,7 @@ func TestMacrosNestedArgs(t *testing.T) {
 		},
 		{
 			`WHERE $__timeFilter(coalesce(a, b))`,
-			`WHERE coalesce(a, b) >= '2026-09-01T00:00:00Z' AND coalesce(a, b) <= '2026-09-04T00:00:00Z'`,
+			`WHERE (coalesce(a, b) >= '2026-09-01T00:00:00Z' AND coalesce(a, b) <= '2026-09-04T00:00:00Z')`,
 		},
 	}
 	for _, c := range cases {

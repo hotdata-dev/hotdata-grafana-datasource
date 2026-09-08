@@ -178,6 +178,12 @@ func (c *Client) pollRun(ctx context.Context, runID, databaseID string) (RunMeta
 				msg = "query run " + st.Status
 			}
 			return RunMeta{}, fmt.Errorf("query %s: %s", st.Status, msg)
+		case "queued", "pending", "running", "processing":
+			// in progress — keep polling
+		default:
+			// A missing or unrecognized status is a malformed response; error out
+			// rather than polling until the context deadline.
+			return RunMeta{}, fmt.Errorf("unexpected query run status %q", st.Status)
 		}
 	}
 }
@@ -192,7 +198,13 @@ func (c *Client) pollRun(ctx context.Context, runID, databaseID string) (RunMeta
 // until the response is an actual Arrow stream, backing off up to PollMax and
 // honoring ctx.
 func (c *Client) FetchResultArrow(ctx context.Context, resultID, databaseID string) (io.ReadCloser, error) {
-	interval := c.PollInitial
+	// The placeholder race lasts milliseconds on the sync path, so start with a
+	// much shorter backoff than the run-poll cadence — waiting PollInitial here
+	// would add half a second to every fast query that hits the race.
+	interval := 50 * time.Millisecond
+	if interval > c.PollInitial {
+		interval = c.PollInitial
+	}
 	for {
 		resp, err := c.do(ctx, http.MethodGet, "/v1/results/"+resultID+"?format=arrow", databaseID, nil)
 		if err != nil {
@@ -353,20 +365,20 @@ func (c *Client) do(ctx context.Context, method, path, databaseID string, body a
 			return nil, err
 		}
 
-		// 429: shed load, honor Retry-After. 502/503/504: transient upstream
-		// failures (e.g. a workspace worker mid-wake) — brief backoff. Queries
-		// are read-only, so re-POSTing /v1/query is safe.
+		// 429 means the request was shed before execution, so any request may be
+		// retried (honoring Retry-After). 502/503/504 are transient upstream
+		// failures (e.g. a workspace worker mid-wake), but the response may have
+		// been lost after the request executed — only idempotent (GET) requests
+		// are retried on those, so a POST /v1/query never runs SQL twice.
+		idempotent := method == http.MethodGet
 		retryable := resp.StatusCode == http.StatusTooManyRequests ||
-			resp.StatusCode == http.StatusBadGateway ||
-			resp.StatusCode == http.StatusServiceUnavailable ||
-			resp.StatusCode == http.StatusGatewayTimeout
+			(idempotent && (resp.StatusCode == http.StatusBadGateway ||
+				resp.StatusCode == http.StatusServiceUnavailable ||
+				resp.StatusCode == http.StatusGatewayTimeout))
 		// maxRetries retries after the initial attempt => 3 requests total.
 		const maxRetries = 2
 		if retryable && attempt < maxRetries {
-			delay := time.Duration(attempt+1) * time.Second
-			if ra, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && ra >= 0 {
-				delay = time.Duration(ra) * time.Second
-			}
+			delay := retryAfterDelay(resp.Header.Get("Retry-After"), time.Duration(attempt+1)*time.Second)
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 			_ = resp.Body.Close()
 			select {
@@ -384,6 +396,24 @@ func (c *Client) do(ctx context.Context, method, path, databaseID string, body a
 		}
 		return resp, nil
 	}
+}
+
+// retryAfterDelay parses a Retry-After header, which is either delta-seconds
+// or an HTTP-date (RFC 9110 §10.2.3), falling back when absent or malformed.
+func retryAfterDelay(header string, fallback time.Duration) time.Duration {
+	if header == "" {
+		return fallback
+	}
+	if secs, err := strconv.Atoi(header); err == nil && secs >= 0 {
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(header); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+		return 0
+	}
+	return fallback
 }
 
 type APIError struct {

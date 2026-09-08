@@ -52,4 +52,6 @@ Set the query format to **Time series** to get one series per `status`.
 
 ## Template variables
 
-Query variables run SQL and use the first string column as values (optional second column as labels). Use standard Grafana interpolation in queries: `$var`, `${var:singlequote}`, `${var:csv}`.
+Query variables run SQL and use the first string column as values (optional second column as labels).
+
+In queries, a single-value variable is inserted as-is (quote it yourself: `WHERE region = '$region'`, or use `${region:sqlstring}` for automatic escaping). A multi-value or include-all variable expands to an escaped, quoted list for use with `IN`: `WHERE service IN ($services)`.

@@ -50,7 +50,8 @@ func interpolateMacros(sql string, tr backend.TimeRange, interval time.Duration)
 			return "", false
 		}
 		col := strings.TrimSpace(args[0])
-		return fmt.Sprintf("%s >= '%s' AND %s <= '%s'", col, from, col, to), true
+		// Parenthesized so the expansion stays a single predicate under NOT/OR.
+		return fmt.Sprintf("(%s >= '%s' AND %s <= '%s')", col, from, col, to), true
 	})
 
 	sql = strings.ReplaceAll(sql, "$__timeFrom()", "'"+from+"'")
@@ -72,7 +73,7 @@ func expandFuncMacro(sql, name string, render func(args []string) (string, bool)
 			break
 		}
 		out.WriteString(sql[:idx])
-		open := idx + len(name)         // position of '('
+		open := idx + len(name) // position of '('
 		args, end, ok := scanArgs(sql, open)
 		if !ok {
 			// Unbalanced — emit the marker and move past it to avoid a loop.
