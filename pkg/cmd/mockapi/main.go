@@ -15,6 +15,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -28,7 +29,16 @@ func main() {
 	addr := flag.String("addr", ":8999", "listen address")
 	flag.Parse()
 
-	var polls atomic.Int32
+	// Per-run state so concurrent queries exercise independent async
+	// lifecycles: each slow query gets its own run id and poll counter, each
+	// result its own fetch counter (first fetch returns a JSON placeholder).
+	var (
+		seq           atomic.Int64
+		mu            sync.Mutex
+		runPolls      = map[string]int{}    // run id → polls so far
+		runResult     = map[string]string{} // run id → result id
+		resultFetches = map[string]int{}    // result id → fetches so far
+	)
 
 	mux := http.NewServeMux()
 
@@ -39,13 +49,23 @@ func main() {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		log.Printf("query db=%s sql=%q", r.Header.Get("x-database-id"), body.SQL)
 
+		n := seq.Add(1)
+		runID := fmt.Sprintf("qrunmock%d", n)
+		resultID := fmt.Sprintf("rsltmock%d", n)
+		mu.Lock()
+		runResult[runID] = resultID
+		resultFetches[resultID] = 0
+		mu.Unlock()
+
 		if bytes.Contains([]byte(body.SQL), []byte("slow")) {
-			polls.Store(0)
+			mu.Lock()
+			runPolls[runID] = 0
+			mu.Unlock()
 			w.WriteHeader(http.StatusAccepted)
-			_, _ = fmt.Fprint(w, `{"query_run_id":"qrunmock","status":"running","status_url":"/v1/query-runs/qrunmock"}`)
+			_, _ = fmt.Fprintf(w, `{"query_run_id":%q,"status":"running","status_url":"/v1/query-runs/%s"}`, runID, runID)
 			return
 		}
-		_, _ = fmt.Fprint(w, `{"query_run_id":"qrunmock","result_id":"rsltmock","columns":["ts","service","value"],"rows":[],"row_count":180,"truncated":false,"execution_time_ms":3}`)
+		_, _ = fmt.Fprintf(w, `{"query_run_id":%q,"result_id":%q,"columns":["ts","service","value"],"rows":[],"row_count":180,"truncated":false,"execution_time_ms":3}`, runID, resultID)
 	})
 
 	// Production contract: query-runs and results are database-scoped.
@@ -58,27 +78,47 @@ func main() {
 		return true
 	}
 
-	mux.HandleFunc("GET /v1/query-runs/qrunmock", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /v1/query-runs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if !requireDB(w, r) {
 			return
 		}
-		if polls.Add(1) < 3 {
-			_, _ = fmt.Fprint(w, `{"id":"qrunmock","status":"running"}`)
+		runID := r.PathValue("id")
+		mu.Lock()
+		resultID, known := runResult[runID]
+		runPolls[runID]++
+		polls := runPolls[runID]
+		mu.Unlock()
+		if !known {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = fmt.Fprint(w, `{"error":{"message":"query run not found","code":"NOT_FOUND"}}`)
 			return
 		}
-		_, _ = fmt.Fprint(w, `{"id":"qrunmock","status":"succeeded","result_id":"rsltmock","row_count":180,"execution_time_ms":2100}`)
+		if polls < 3 {
+			_, _ = fmt.Fprintf(w, `{"id":%q,"status":"running"}`, runID)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"id":%q,"status":"succeeded","result_id":%q,"row_count":180,"execution_time_ms":2100}`, runID, resultID)
 	})
 
-	var resultFetches atomic.Int32
-	mux.HandleFunc("GET /v1/results/rsltmock", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /v1/results/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if !requireDB(w, r) {
+			return
+		}
+		resultID := r.PathValue("id")
+		mu.Lock()
+		fetches, known := resultFetches[resultID]
+		resultFetches[resultID] = fetches + 1
+		mu.Unlock()
+		if !known {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = fmt.Fprint(w, `{"error":{"message":"result not found","code":"NOT_FOUND"}}`)
 			return
 		}
 		// Model the fast-path race: first fetch returns a JSON placeholder
 		// before the Arrow stream is materialized.
-		if resultFetches.Add(1) == 1 {
+		if fetches == 0 {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = fmt.Fprint(w, `{"result_id":"rsltmock","status":"processing"}`)
+			_, _ = fmt.Fprintf(w, `{"result_id":%q,"status":"processing"}`, resultID)
 			return
 		}
 		w.Header().Set("Content-Type", "application/vnd.apache.arrow.stream")

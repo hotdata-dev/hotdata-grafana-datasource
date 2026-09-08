@@ -188,13 +188,6 @@ func (d *Datasource) query(ctx context.Context, query backend.DataQuery) backend
 			"executionTimeMs": meta.ExecutionTimeMS,
 		},
 	}
-	if truncated {
-		frame.Meta.Notices = append(frame.Meta.Notices, data.Notice{
-			Severity: data.NoticeSeverityWarning,
-			Text:     fmt.Sprintf("Result truncated at %d rows — narrow the query.", MaxResultRows),
-		})
-	}
-
 	if qm.Format == "timeseries" {
 		if wide, err := data.LongToWide(frame, nil); err == nil {
 			frame = wide
@@ -206,6 +199,15 @@ func (d *Datasource) query(ctx context.Context, query backend.DataQuery) backend
 				Text:     fmt.Sprintf("Time series conversion failed (returning long format): %v", err),
 			})
 		}
+	}
+
+	// Attached after the time-series conversion so the notice survives even if
+	// a future SDK version stops carrying Meta over to the wide frame.
+	if truncated {
+		frame.Meta.Notices = append(frame.Meta.Notices, data.Notice{
+			Severity: data.NoticeSeverityWarning,
+			Text:     fmt.Sprintf("Result truncated at %d rows — narrow the query.", MaxResultRows),
+		})
 	}
 
 	return backend.DataResponse{Frames: data.Frames{frame}}

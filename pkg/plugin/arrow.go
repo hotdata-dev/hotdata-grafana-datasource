@@ -51,7 +51,10 @@ func FrameFromArrowStream(r io.Reader) (*data.Frame, bool, error) {
 			}
 		}
 		if rows += rec.NumRows(); rows >= MaxResultRows {
-			truncated = rows > MaxResultRows || rdr.Next()
+			// Whole batches are appended, so nothing was dropped yet even if the
+			// crossing batch overshot the cap; the result is truncated only when
+			// further batches remain unread.
+			truncated = rdr.Next()
 			break
 		}
 	}

@@ -74,10 +74,12 @@ func arrowFixture(t *testing.T) []byte {
 }
 
 type serverOpts struct {
-	async          bool
-	pollsNeeded    int32
-	rateLimit      bool
-	resultNotReady int32 // fetches that return a JSON "processing" placeholder first
+	async           bool
+	pollsNeeded     int32
+	rateLimit       bool
+	resultNotReady  int32         // fetches that return a JSON "processing" placeholder first
+	postUnavailable bool          // POST /v1/query answers 503 (never retryable: could re-run SQL)
+	postCount       *atomic.Int32 // when set, counts POST /v1/query requests
 }
 
 // newContractServer serves the captured Hotdata v1 wire contract.
@@ -89,6 +91,14 @@ func newContractServer(t *testing.T, opts serverOpts) (*httptest.Server, *atomic
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/query", func(w http.ResponseWriter, r *http.Request) {
+		if opts.postCount != nil {
+			opts.postCount.Add(1)
+		}
+		if opts.postUnavailable {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":"WORKER_UNAVAILABLE"}`))
+			return
+		}
 		if r.Header.Get("Authorization") != "Bearer test-key" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
@@ -209,6 +219,22 @@ func runQuery(t *testing.T, ds *Datasource, queryJSON string) backend.DataRespon
 		t.Fatal(err)
 	}
 	return resp.Responses["A"]
+}
+
+// A 503 on POST /v1/query must never be retried: the response may have been
+// lost after the SQL executed, so a retry could run the statement twice.
+func TestNoRetryOnQueryPostUnavailable(t *testing.T) {
+	posts := &atomic.Int32{}
+	srv, _ := newContractServer(t, serverOpts{postUnavailable: true, postCount: posts})
+	ds := newTestDatasource(srv)
+
+	res := runQuery(t, ds, `{"rawSql":"SELECT 1"}`)
+	if res.Error == nil {
+		t.Fatal("expected an error when POST /v1/query answers 503")
+	}
+	if got := posts.Load(); got != 1 {
+		t.Fatalf("POST /v1/query sent %d times, want exactly 1 (no retry on 503)", got)
+	}
 }
 
 func assertFixtureFrame(t *testing.T, res backend.DataResponse) {
