@@ -23,7 +23,7 @@
     "@grafana/data": "13.1.6",
     "@grafana/eslint-config": "^9.0.0",
     "@grafana/i18n": "13.1.6",
-    "@grafana/plugin-e2e": "3.11.1",
+    "@grafana/plugin-e2e": "3.14.0",
     "@grafana/runtime": "13.1.6",
     "@grafana/schema": "13.1.6",
     "@grafana/sign-plugin": "^3.3.3",
