@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.3
+
+- Build backend binaries with Go 1.27.2 and bump golang.org/x/net to v0.60.0, clearing the Go vulnerabilities flagged by Grafana plugin validation (GO-2026-6599, 6600, 6603, 6605, 6607, 6608, 6610 through 6613, 6617).
+- Update @grafana packages to 13.1.8 and force moment to 2.31.0 (GHSA-4p3w-j4w9-5jqw).
+
 ## 1.0.2
 
 - Bump google.golang.org/grpc to v1.83.2, fixing the high-severity xDS DoS vulnerability CVE-2026-84445 (GHSA-2v4p-qf9q-27wj) flagged by Grafana plugin validation.
