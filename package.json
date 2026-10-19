@@ -1,6 +1,6 @@
 {
   "name": "hotdata",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "scripts": {
     "build": "webpack -c ./.config/webpack/webpack.config.ts --env production",
     "dev": "webpack -w -c ./.config/webpack/webpack.config.ts --env development",
@@ -18,7 +18,10 @@
   "overrides": {
     "dompurify": "^3.4.13",
     "js-cookie": "^3.0.7",
-    "moment": "^2.31.0"
+    "moment": "^2.31.0",
+    "basic-ftp": "^6.2.3",
+    "source-map-js": "^1.2.2",
+    "micromatch": "npm:picomatch@^4.0.3"
   },
   "devDependencies": {
     "@grafana/data": "13.1.8",

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.4
+
+- Clear the high-severity osv-scanner findings that failed Grafana plugin validation for 1.0.3 (all in dev/build tooling): force basic-ftp to 6.2.3 and source-map-js to 1.2.2, and replace micromatch with picomatch under eslint-webpack-plugin, since braces has no fixed release.
+
 ## 1.0.3
 
 - Build backend binaries with Go 1.27.2 and bump golang.org/x/net to v0.60.0, clearing the Go vulnerabilities flagged by Grafana plugin validation (GO-2026-6599, 6600, 6603, 6605, 6607, 6608, 6610 through 6613, 6617).
