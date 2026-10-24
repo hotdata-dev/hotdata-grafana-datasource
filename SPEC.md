@@ -17,7 +17,7 @@ Hotdata's engine is Arrow-native — `information_schema` reports Arrow type nam
 So we **skip** the `database/sql` + `sqlds` route. The inline JSON rows from `POST /v1/query` carry no type metadata (timestamps arrive as bare strings without timezone), which would force lossy type inference. Instead:
 
 - Implement `backend.QueryDataHandler` directly.
-- Always fetch results from `GET /v1/results/{id}?format=arrow` and convert record batches to frames (~200 lines; InfluxData's deprecated Flight SQL plugin is a reference implementation).
+- Always read results as Arrow — inline from `POST /v1/query` (`Accept: application/vnd.apache.arrow.stream`), or from `GET /v1/results/{id}?format=arrow` when the query goes async — and convert record batches to frames (~200 lines; InfluxData's deprecated Flight SQL plugin is a reference implementation).
 - Reuse `grafana-plugin-sdk-go/data/sqlutil` for macro interpolation only, and `data.LongToWide` for time-series shaping.
 
 Typed, complete, no JSON round-trip.
@@ -28,22 +28,14 @@ All requests: `Authorization: Bearer <api-key>`, `x-workspace-id: work…`. Quer
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /v1/query` | Run SQL. Body: `{"sql", "async": true, "async_after_ms", "dialect"?}` |
+| `POST /v1/query` | Run SQL. Body: `{"sql", "async": true, "async_after_ms", "dialect"?}`; `Accept: application/vnd.apache.arrow.stream` |
 | `GET /v1/query-runs/{qrun}` | Poll an async run |
 | `GET /v1/results/{rslt}?format=arrow` | Fetch full result as Arrow IPC stream |
-| `GET /v1/databases` / `GET /v1/databases/{id}` | List databases / resolve `default_connection_id` |
-| `GET /v1/information_schema?connection_id=…` | Tables; `&schema=&table=&include_columns=true` adds columns with Arrow types |
+| `GET /v1/databases` / `GET /v1/databases/{id}` | List databases (paginated) / resolve `default_connection_id` |
+| `GET /v1/information_schema?connection_id=…` | Tables (paginated); `&schema=&table=&include_columns=true` adds columns with Arrow types |
 | `GET /v1/workspaces` | Workspace list (config editor) |
 
-**Fast query → `200`** (completed within `async_after_ms`):
-
-```json
-{"query_run_id":"qrun…","result_id":"rslt…",
- "columns":["one","f","s","ts","b"],"nullable":[false,true,false,false,false],
- "rows":[[1,1.5,"x","2026-09-04T19:55:56.368620650",true]],
- "row_count":1,"preview_row_count":1,"total_row_count":1,
- "truncated":false,"execution_time_ms":2}
-```
+**Fast query → `200`** (completed within `async_after_ms`): an Arrow IPC stream body holding the whole result. The run metadata comes as headers: `X-Query-Run-Id`, `X-Result-Id`, `X-Total-Row-Count`, `X-Execution-Time-Ms`.
 
 **Slow query → `202`:**
 
@@ -51,21 +43,28 @@ All requests: `Authorization: Bearer <api-key>`, `x-workspace-id: work…`. Quer
 {"query_run_id":"qrun…","status":"running","status_url":"/v1/query-runs/qrun…"}
 ```
 
-**Poll → `200`:** `{"id","status":"running"|"succeeded"|"failed","result_id","row_count","execution_time_ms","trace_id",…}`
+**Result too large to inline → `202`** with the same body plus an `X-Result-Id` header: read it from the Results API, no run polling.
+
+**Poll → `200`:** `{"id","status":"running"|"succeeded"|"failed","result_id","row_count","execution_time_ms","error_message","trace_id",…}`
+
+**Results:** `200` Arrow when ready; `202` `{"result_id","status":"processing"}` + `Retry-After` while persisting; `409` `{"status":"failed","error_message"}` on failure.
+
+**Listings** (`/v1/databases`, `/v1/information_schema`) return one page: follow `next_cursor` (as `?cursor=`) while `has_more` is true.
 
 **Schema discovery** (`include_columns=true`):
 
 ```json
 {"tables":[{"schema":"cities","table":"global","synced":true,
   "columns":[{"name":"city","data_type":"Utf8View","nullable":true},
-             {"name":"latitude","data_type":"Float64","nullable":true}]}]}
+             {"name":"latitude","data_type":"Float64","nullable":true}]}],
+ "count":1,"has_more":false}
 ```
 
 **Operational behavior:**
 - `429` with `OVERLOADED` code + `Retry-After` header under load — retry with honor, cap 3 attempts.
 - Cold start: first query against an idle workspace blocks ~10–20s while the worker wakes. Not an error.
 - Dialects: `hotsql` (default), `postgres`, `duckdb`, `snowflake` — non-hotsql is transpiled server-side, read-only.
-- Errors carry stable codes alongside messages — branch on the code, not the sentence.
+- Errors carry stable codes alongside messages — branch on the code, not the sentence. Body shape: `{"error":{"code","message"}}` (a few endpoints send `{"error":"code"}`).
 
 ## 4. Query execution flow (backend)
 
@@ -76,17 +75,20 @@ sequenceDiagram
     participant H as Hotdata API
     G->>P: QueryData(rawSql, timeRange)
     P->>P: interpolate macros (sqlutil)
-    P->>H: POST /v1/query {sql, async:true, async_after_ms:1000}
+    P->>H: POST /v1/query {sql, async:true, async_after_ms:1000} (Accept: Arrow)
     alt completed fast (200)
-        H-->>P: result_id + inline preview
+        H-->>P: Arrow IPC stream (+ X-Query-Run-Id, X-Result-Id headers)
+    else too large to inline (202 + X-Result-Id)
+        P->>H: GET /v1/results/{result_id}?format=arrow
+        H-->>P: Arrow IPC stream
     else still running (202)
         H-->>P: query_run_id + status_url
         loop 500ms → 2s backoff, until terminal or ctx.Done()
             P->>H: GET /v1/query-runs/{id}
         end
+        P->>H: GET /v1/results/{result_id}?format=arrow
+        H-->>P: Arrow IPC stream
     end
-    P->>H: GET /v1/results/{result_id}?format=arrow
-    H-->>P: Arrow IPC stream
     P->>P: record batches → data.Frame (+LongToWide if timeseries)
     P-->>G: frames
 ```
@@ -94,7 +96,7 @@ sequenceDiagram
 Details:
 - Set `async_after_ms: 1000` — the server-enforced minimum.
 - Poll at 500ms, ×1.5 backoff, 2s cap. Respect `ctx.Done()` — Grafana cancels on panel abort/timeout.
-- Always fetch via the Arrow results endpoint, even on the fast path — the inline JSON is an untyped preview; `truncated: true` never applies to the Arrow fetch.
+- Always read Arrow, never the JSON form — JSON is untyped. An inline Arrow response always holds the whole result; the server answers 202 instead of truncating.
 - Overall deadline comes from the query context; surface cold-start waits as a frame notice ("waking workspace worker"), not an error.
 
 ## 5. Configuration

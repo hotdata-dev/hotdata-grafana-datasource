@@ -164,12 +164,7 @@ func (d *Datasource) query(ctx context.Context, query backend.DataQuery) backend
 
 	sql := interpolateMacros(qm.RawSql, query.TimeRange, query.Interval)
 
-	meta, err := d.client.RunQuery(ctx, dbID, sql, dialect)
-	if err != nil {
-		return errResponse(err)
-	}
-
-	body, err := d.client.FetchResultArrow(ctx, meta.ResultID, dbID)
+	meta, body, err := d.client.Query(ctx, dbID, sql, dialect)
 	if err != nil {
 		return errResponse(err)
 	}
@@ -246,7 +241,7 @@ func (d *Datasource) CheckHealth(ctx context.Context, req *backend.CheckHealthRe
 		}, nil
 	}
 
-	if _, err := d.client.ListDatabases(ctx); err != nil {
+	if err := d.client.Ping(ctx); err != nil {
 		var apiErr *hotdata.APIError
 		msg := fmt.Sprintf("Could not reach Hotdata: %v", err)
 		if errors.As(err, &apiErr) && (apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden) {
@@ -268,12 +263,14 @@ func (d *Datasource) CheckHealth(ctx context.Context, req *backend.CheckHealthRe
 	qctx, cancel := context.WithTimeout(ctx, 35*time.Second)
 	defer cancel()
 	start := time.Now()
-	if _, err := d.client.RunQuery(qctx, d.settings.DefaultDatabaseID, "SELECT 1", ""); err != nil {
+	_, body, err := d.client.Query(qctx, d.settings.DefaultDatabaseID, "SELECT 1", "")
+	if err != nil {
 		return &backend.CheckHealthResult{
 			Status:  backend.HealthStatusError,
 			Message: fmt.Sprintf("Connected, but test query failed: %v", err),
 		}, nil
 	}
+	_ = body.Close()
 
 	msg := "Connected to Hotdata; test query succeeded."
 	if elapsed := time.Since(start); elapsed > 5*time.Second {

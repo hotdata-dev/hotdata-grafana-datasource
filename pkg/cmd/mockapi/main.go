@@ -65,7 +65,18 @@ func main() {
 			_, _ = fmt.Fprintf(w, `{"query_run_id":%q,"status":"running","status_url":"/v1/query-runs/%s"}`, runID, runID)
 			return
 		}
-		_, _ = fmt.Fprintf(w, `{"query_run_id":%q,"result_id":%q,"columns":["ts","service","value"],"rows":[],"row_count":180,"truncated":false,"execution_time_ms":3}`, runID, resultID)
+		if r.Header.Get("Accept") != "application/vnd.apache.arrow.stream" {
+			_, _ = fmt.Fprintf(w, `{"query_run_id":%q,"result_id":%q,"columns":["ts","service","value"],"rows":[],"preview_row_count":180,"total_row_count":180,"truncated":false,"execution_time_ms":3}`, runID, resultID)
+			return
+		}
+		w.Header().Set("Content-Type", "application/vnd.apache.arrow.stream")
+		w.Header().Set("X-Query-Run-Id", runID)
+		w.Header().Set("X-Result-Id", resultID)
+		w.Header().Set("X-Total-Row-Count", "180")
+		w.Header().Set("X-Execution-Time-Ms", "3")
+		if err := writeSeries(w); err != nil {
+			log.Printf("writing arrow stream: %v", err)
+		}
 	})
 
 	// Production contract: query-runs and results are database-scoped.
@@ -114,10 +125,12 @@ func main() {
 			_, _ = fmt.Fprint(w, `{"error":{"message":"result not found","code":"NOT_FOUND"}}`)
 			return
 		}
-		// Model the fast-path race: first fetch returns a JSON placeholder
-		// before the Arrow stream is materialized.
+		// First fetch: the result is still being persisted, answered with 202
+		// and a JSON placeholder before the Arrow stream is served.
 		if fetches == 0 {
 			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusAccepted)
 			_, _ = fmt.Fprintf(w, `{"result_id":%q,"status":"processing"}`, resultID)
 			return
 		}
@@ -128,7 +141,7 @@ func main() {
 	})
 
 	mux.HandleFunc("GET /v1/databases", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = fmt.Fprint(w, `{"databases":[{"id":"dbmock","name":"mock-db","default_catalog":"default","default_schema":"public","created_at":"2026-09-04T00:00:00Z"}]}`)
+		_, _ = fmt.Fprint(w, `{"databases":[{"id":"dbmock","name":"mock-db","default_catalog":"default","default_schema":"public","created_at":"2026-09-04T00:00:00Z"}],"count":1,"limit":100,"has_more":false}`)
 	})
 
 	mux.HandleFunc("GET /v1/databases/dbmock", func(w http.ResponseWriter, r *http.Request) {
@@ -140,7 +153,7 @@ func main() {
 		if r.URL.Query().Get("include_columns") == "true" {
 			cols = `,"columns":[{"name":"ts","data_type":"Timestamp(Microsecond, Some(\"UTC\"))","nullable":true},{"name":"service","data_type":"Utf8View","nullable":true},{"name":"value","data_type":"Float64","nullable":true}]`
 		}
-		_, _ = fmt.Fprintf(w, `{"tables":[{"connection":"__db_mock","schema":"public","table":"metrics","synced":true,"last_sync":"2026-09-04 00:00:00"%s,"partition_by":[],"sorted_by":[]}]}`, cols)
+		_, _ = fmt.Fprintf(w, `{"tables":[{"connection":"__db_mock","schema":"public","table":"metrics","synced":true,"last_sync":"2026-09-04 00:00:00"%s,"partition_by":[],"sorted_by":[],"constant_per_key":[]}],"count":1,"limit":100,"has_more":false}`, cols)
 	})
 
 	mux.HandleFunc("GET /v1/workspaces", func(w http.ResponseWriter, r *http.Request) {

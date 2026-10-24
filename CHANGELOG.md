@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Read query results as Arrow directly from `POST /v1/query`, so a fast query takes one request instead of two. Async and too-large results still come from the Results API.
+- Show the real error for failed queries: read `error_message` from query runs and failed results, and show the `message` and `code` from Hotdata error bodies instead of raw JSON.
+- Follow pagination on `/v1/databases` and `/v1/information_schema`, so the database picker and SQL autocomplete list every database and table, not just the first page.
+- Handle the Results API's `202` (still persisting, honoring `Retry-After`) and `409` (failed) responses.
+- The health check validates credentials with one `GET /v1/databases?limit=1` instead of listing every database.
+
 ## 1.0.4
 
 - Clear the high-severity osv-scanner findings that failed Grafana plugin validation for 1.0.3 (all in dev/build tooling): force basic-ftp to 6.2.3 and source-map-js to 1.2.2, and replace micromatch with picomatch under eslint-webpack-plugin, since braces has no fixed release.
