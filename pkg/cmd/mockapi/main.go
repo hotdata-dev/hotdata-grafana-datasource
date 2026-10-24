@@ -15,6 +15,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -141,7 +142,12 @@ func main() {
 	})
 
 	mux.HandleFunc("GET /v1/databases", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = fmt.Fprint(w, `{"databases":[{"id":"dbmock","name":"mock-db","default_catalog":"default","default_schema":"public","created_at":"2026-09-04T00:00:00Z"}],"count":1,"limit":100,"has_more":false}`)
+		// search is a case-insensitive substring filter on the name.
+		if !strings.Contains("mock-db", strings.ToLower(r.URL.Query().Get("search"))) {
+			_, _ = fmt.Fprint(w, `{"databases":[],"count":0,"limit":50,"has_more":false}`)
+			return
+		}
+		_, _ = fmt.Fprint(w, `{"databases":[{"id":"dbmock","name":"mock-db","default_catalog":"default","default_schema":"public","created_at":"2026-09-04T00:00:00Z"}],"count":1,"limit":50,"has_more":false}`)
 	})
 
 	mux.HandleFunc("GET /v1/databases/dbmock", func(w http.ResponseWriter, r *http.Request) {

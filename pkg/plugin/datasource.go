@@ -279,6 +279,9 @@ func (d *Datasource) CheckHealth(ctx context.Context, req *backend.CheckHealthRe
 	return &backend.CheckHealthResult{Status: backend.HealthStatusOk, Message: msg}, nil
 }
 
+// databasePickerLimit caps how many databases one picker search returns.
+const databasePickerLimit = 50
+
 // CallResource serves the frontend's pickers and SQL autocomplete; the API
 // key never reaches the browser.
 func (d *Datasource) CallResource(ctx context.Context, req *backend.CallResourceRequest, sender backend.CallResourceResponseSender) error {
@@ -290,9 +293,21 @@ func (d *Datasource) CallResource(ctx context.Context, req *backend.CallResource
 
 	switch req.Path {
 	case "databases":
-		dbs, err := d.client.ListDatabases(ctx)
+		// ?id= resolves one database (the picker's label for a saved id);
+		// otherwise ?search= filters by name on the server.
+		if id := params.Get("id"); id != "" {
+			db, err := d.client.GetDatabase(ctx, id)
+			if err != nil {
+				return sendJSON(sender, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			}
+			return sendJSON(sender, http.StatusOK, []hotdata.Database{db.Database})
+		}
+		dbs, err := d.client.SearchDatabases(ctx, params.Get("search"), databasePickerLimit)
 		if err != nil {
 			return sendJSON(sender, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		}
+		if dbs == nil {
+			dbs = []hotdata.Database{}
 		}
 		return sendJSON(sender, http.StatusOK, dbs)
 

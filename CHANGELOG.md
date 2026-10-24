@@ -4,7 +4,8 @@
 
 - Read query results as Arrow directly from `POST /v1/query`, so a fast query takes one request instead of two. Async and too-large results still come from the Results API.
 - Show the real error for failed queries: read `error_message` from query runs and failed results, and show the `message` and `code` from Hotdata error bodies instead of raw JSON.
-- Follow pagination on `/v1/databases` and `/v1/information_schema`, so the database picker and SQL autocomplete list every database and table, not just the first page.
+- The query editor's database picker searches by name on the server as you type (`GET /v1/databases?search=`), so any database in a large workspace can be found without loading them all. A saved database shows its name, not its id.
+- Follow pagination on `/v1/information_schema`, so SQL autocomplete lists every table, not just the first page.
 - Handle the Results API's `202` (still persisting) and `409` (failed) responses. Polling keeps its fast 50ms backoff rather than the server's `Retry-After: 1`, which would add a second to large results.
 - The health check validates credentials with one `GET /v1/databases?limit=1` instead of listing every database.
 

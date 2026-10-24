@@ -33,7 +33,7 @@ export interface HotdataSecureJsonData {
 /** Shape served by the backend `databases` resource endpoint. */
 export interface DatabaseResource {
   id: string;
-  name: string;
+  name: string | null;
   default_catalog: string;
   default_schema: string;
 }

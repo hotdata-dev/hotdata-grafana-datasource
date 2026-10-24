@@ -25,3 +25,21 @@ test('table query should return the mock series', async ({ panelEditPage, readPr
   await expect(panelEditPage.refreshPanel()).toBeOK();
   await expect(panelEditPage.panel.data).toContainText(['api']);
 });
+
+// The database picker searches by name on the server (mock API: one database,
+// "mock-db"). Combobox options render in a portal listbox, so they are found by
+// role on the page.
+test('database picker should search databases by name', async ({ panelEditPage, readProvisionedDataSource, page }) => {
+  const ds = await readProvisionedDataSource({ fileName: 'datasources.yml' });
+  await panelEditPage.datasource.set(ds.name);
+  const picker = panelEditPage.getQueryEditorRow('A').getByRole('combobox', { name: 'Database' });
+  const option = page.getByRole('option', { name: /mock-db/ });
+  await picker.click();
+  await picker.fill('MOCK');
+  await expect(option).toBeVisible();
+  await picker.fill('no-such-db');
+  await expect(option).toBeHidden();
+  await picker.fill('mock');
+  await option.click();
+  await expect(picker).toHaveValue('mock-db');
+});
