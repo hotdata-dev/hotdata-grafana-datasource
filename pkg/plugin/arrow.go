@@ -19,14 +19,13 @@ import (
 // truncation to the user.
 const MaxResultRows = 1_000_000
 
-// FrameFromArrowStream decodes an Arrow IPC stream (as served by
-// GET /v1/results/{id}?format=arrow) into a single Grafana data frame. The
+// FrameFromArrowStream decodes an Arrow IPC stream (as served by POST /v1/query
+// with an Arrow Accept header, or GET /v1/results/{id}?format=arrow) into a single Grafana data frame. The
 // boolean reports whether the result was truncated at MaxResultRows.
 //
 // Hotdata's engine reports Arrow types directly (Utf8View, Int64, Float64,
 // Timestamp, ...), so this mapping is the plugin's single source of type
-// truth — the inline JSON preview from POST /v1/query is untyped and never
-// used for data.
+// truth — the JSON form of a result is untyped and never used for data.
 func FrameFromArrowStream(r io.Reader) (*data.Frame, bool, error) {
 	rdr, err := ipc.NewReader(r)
 	if err != nil {

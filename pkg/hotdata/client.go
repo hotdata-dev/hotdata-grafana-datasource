@@ -74,9 +74,12 @@ type Workspace struct {
 type RunMeta struct {
 	QueryRunID      string
 	ResultID        string
-	RowCount        int64
 	ExecutionTimeMS int64
 }
+
+// arrowStreamType is the media type Hotdata uses for Arrow IPC streams, both
+// as the Accept value on POST /v1/query and the result Content-Type.
+const arrowStreamType = "application/vnd.apache.arrow.stream"
 
 // queryRequest is the POST /v1/query body. async_after_ms is the server-side
 // budget before the request degrades to a 202 + poll flow.
@@ -87,53 +90,76 @@ type queryRequest struct {
 	Dialect      string `json:"dialect,omitempty"`
 }
 
+// queryResponse is the JSON body of POST /v1/query: a 202 run ticket, or a
+// 200 from a server that answered JSON despite the Arrow Accept header.
 type queryResponse struct {
 	QueryRunID      string `json:"query_run_id"`
 	ResultID        string `json:"result_id"`
-	RowCount        int64  `json:"row_count"`
 	ExecutionTimeMS int64  `json:"execution_time_ms"`
-	// 202 fields
-	Status    string `json:"status"`
-	StatusURL string `json:"status_url"`
+	Warning         string `json:"warning"`
 }
 
 type queryRunStatus struct {
 	ID              string `json:"id"`
 	Status          string `json:"status"`
 	ResultID        string `json:"result_id"`
-	RowCount        int64  `json:"row_count"`
 	ExecutionTimeMS int64  `json:"execution_time_ms"`
-	Error           string `json:"error"`
-	Message         string `json:"message"`
+	ErrorMessage    string `json:"error_message"`
 }
 
-// RunQuery executes SQL in the given database and blocks until the run is
-// terminal, following the async 202 + poll flow when the server chooses it.
-// async_after_ms has a server-enforced minimum of 1000.
-func (c *Client) RunQuery(ctx context.Context, databaseID, sql, dialect string) (RunMeta, error) {
+// Query executes SQL in the given database and returns the complete result
+// as an Arrow IPC stream. The caller must close the reader.
+//
+// The request asks for Arrow directly, so a query that finishes within
+// async_after_ms comes back in one round trip. Otherwise the server answers
+// 202: with an X-Result-Id header when the result was too large to inline,
+// or with only a run ticket when the query went async, in which case the run
+// is polled until it has a result. async_after_ms has a server minimum of 1000.
+func (c *Client) Query(ctx context.Context, databaseID, sql, dialect string) (RunMeta, io.ReadCloser, error) {
 	body := queryRequest{SQL: sql, Async: true, AsyncAfterMS: 1000, Dialect: dialect}
-	resp, err := c.do(ctx, http.MethodPost, "/v1/query", databaseID, body)
+	resp, err := c.doAccept(ctx, http.MethodPost, "/v1/query", databaseID, arrowStreamType, body)
 	if err != nil {
-		return RunMeta{}, err
+		return RunMeta{}, nil, err
 	}
-	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusOK && isArrow(resp.Header.Get("Content-Type")) {
+		execMS, _ := strconv.ParseInt(resp.Header.Get("X-Execution-Time-Ms"), 10, 64)
+		return RunMeta{
+			QueryRunID:      resp.Header.Get("X-Query-Run-Id"),
+			ResultID:        resp.Header.Get("X-Result-Id"),
+			ExecutionTimeMS: execMS,
+		}, resp.Body, nil
+	}
 
 	var qr queryResponse
-	if err := json.NewDecoder(resp.Body).Decode(&qr); err != nil {
-		return RunMeta{}, fmt.Errorf("decoding query response: %w", err)
+	err = json.NewDecoder(resp.Body).Decode(&qr)
+	_ = resp.Body.Close()
+	if err != nil {
+		return RunMeta{}, nil, fmt.Errorf("decoding query response: %w", err)
+	}
+	meta := RunMeta{QueryRunID: qr.QueryRunID, ResultID: qr.ResultID, ExecutionTimeMS: qr.ExecutionTimeMS}
+	if id := resp.Header.Get("X-Result-Id"); id != "" {
+		meta.ResultID = id
 	}
 
-	if resp.StatusCode == http.StatusOK {
-		return RunMeta{
-			QueryRunID:      qr.QueryRunID,
-			ResultID:        qr.ResultID,
-			RowCount:        qr.RowCount,
-			ExecutionTimeMS: qr.ExecutionTimeMS,
-		}, nil
+	if resp.StatusCode == http.StatusAccepted && meta.ResultID == "" {
+		if meta, err = c.pollRun(ctx, qr.QueryRunID, databaseID); err != nil {
+			return RunMeta{}, nil, err
+		}
+	}
+	if meta.ResultID == "" {
+		msg := qr.Warning
+		if msg == "" {
+			msg = "no result id returned"
+		}
+		return RunMeta{}, nil, fmt.Errorf("query result unavailable: %s", msg)
 	}
 
-	// 202: poll /v1/query-runs/{id} until terminal.
-	return c.pollRun(ctx, qr.QueryRunID, databaseID)
+	rc, err := c.FetchResultArrow(ctx, meta.ResultID, databaseID)
+	if err != nil {
+		return RunMeta{}, nil, err
+	}
+	return meta, rc, nil
 }
 
 // pollRun polls a query run until terminal. The endpoint is database-scoped,
@@ -166,14 +192,10 @@ func (c *Client) pollRun(ctx context.Context, runID, databaseID string) (RunMeta
 			return RunMeta{
 				QueryRunID:      st.ID,
 				ResultID:        st.ResultID,
-				RowCount:        st.RowCount,
 				ExecutionTimeMS: st.ExecutionTimeMS,
 			}, nil
 		case "failed", "cancelled":
-			msg := st.Error
-			if msg == "" {
-				msg = st.Message
-			}
+			msg := st.ErrorMessage
 			if msg == "" {
 				msg = "query run " + st.Status
 			}
@@ -191,16 +213,13 @@ func (c *Client) pollRun(ctx context.Context, runID, databaseID string) (RunMeta
 // FetchResultArrow streams the complete result set as Arrow IPC. The endpoint
 // is database-scoped. The caller must close the reader.
 //
-// A freshly created result is not immediately materialized: the endpoint
-// answers HTTP 200 with a JSON body {"result_id":…,"status":"processing"}
-// rather than blocking. This happens on the fast/sync query path, where the
-// fetch can land within milliseconds of the result id being minted. So poll
+// A result that is still being persisted answers 202 with a JSON body
+// {"result_id":…,"status":"processing"} and a Retry-After header, so poll
 // until the response is an actual Arrow stream, backing off up to PollMax and
-// honoring ctx.
+// honoring ctx. A failed result answers 409, which surfaces as an APIError.
 func (c *Client) FetchResultArrow(ctx context.Context, resultID, databaseID string) (io.ReadCloser, error) {
-	// The placeholder race lasts milliseconds on the sync path, so start with a
-	// much shorter backoff than the run-poll cadence — waiting PollInitial here
-	// would add half a second to every fast query that hits the race.
+	// Persistence of a just-minted result usually takes milliseconds, so start
+	// with a much shorter backoff than the run-poll cadence.
 	interval := 50 * time.Millisecond
 	if interval > c.PollInitial {
 		interval = c.PollInitial
@@ -220,9 +239,8 @@ func (c *Client) FetchResultArrow(ctx context.Context, resultID, databaseID stri
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 		_ = resp.Body.Close()
 		var st struct {
-			Status  string `json:"status"`
-			Error   string `json:"error"`
-			Message string `json:"message"`
+			Status       string `json:"status"`
+			ErrorMessage string `json:"error_message"`
 		}
 		if err := json.Unmarshal(raw, &st); err != nil {
 			return nil, fmt.Errorf("unexpected non-arrow result response: %s", strings.TrimSpace(string(raw)))
@@ -233,20 +251,21 @@ func (c *Client) FetchResultArrow(ctx context.Context, resultID, databaseID stri
 		case "processing", "pending", "running":
 			// keep polling
 		default:
-			msg := st.Error
-			if msg == "" {
-				msg = st.Message
-			}
+			msg := st.ErrorMessage
 			if msg == "" {
 				msg = strings.TrimSpace(string(raw))
 			}
 			return nil, fmt.Errorf("result not available (status %q): %s", st.Status, msg)
 		}
 
+		wait := retryAfterDelay(resp.Header.Get("Retry-After"), interval)
+		if wait > c.PollMax {
+			wait = c.PollMax
+		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(interval):
+		case <-time.After(wait):
 		}
 		if interval = interval * 3 / 2; interval > c.PollMax {
 			interval = c.PollMax
@@ -258,19 +277,62 @@ func isArrow(contentType string) bool {
 	return strings.Contains(contentType, "arrow")
 }
 
+// maxPages bounds every paginated listing so a server that keeps answering
+// has_more can never loop forever.
+const maxPages = 100
+
+// page is the cursor envelope shared by the paginated listings.
+type page struct {
+	HasMore    bool   `json:"has_more"`
+	NextCursor string `json:"next_cursor"`
+}
+
+// listPages fetches path page by page, following next_cursor. decode reads
+// one page's items and returns the page envelope.
+func (c *Client) listPages(ctx context.Context, path string, q url.Values, decode func(io.Reader) (page, error)) error {
+	for i := 0; i < maxPages; i++ {
+		resp, err := c.do(ctx, http.MethodGet, path+"?"+q.Encode(), "", nil)
+		if err != nil {
+			return err
+		}
+		p, err := decode(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			return err
+		}
+		if !p.HasMore || p.NextCursor == "" {
+			return nil
+		}
+		q.Set("cursor", p.NextCursor)
+	}
+	return nil
+}
+
+// ListDatabases returns every database in the workspace, following pages.
 func (c *Client) ListDatabases(ctx context.Context) ([]Database, error) {
-	resp, err := c.do(ctx, http.MethodGet, "/v1/databases", "", nil)
+	var all []Database
+	err := c.listPages(ctx, "/v1/databases", url.Values{"limit": {"100"}}, func(r io.Reader) (page, error) {
+		var out struct {
+			page
+			Databases []Database `json:"databases"`
+		}
+		if err := json.NewDecoder(r).Decode(&out); err != nil {
+			return page{}, fmt.Errorf("decoding databases: %w", err)
+		}
+		all = append(all, out.Databases...)
+		return out.page, nil
+	})
+	return all, err
+}
+
+// Ping makes the cheapest workspace-scoped call, validating the API key and
+// workspace id.
+func (c *Client) Ping(ctx context.Context) error {
+	resp, err := c.do(ctx, http.MethodGet, "/v1/databases?limit=1", "", nil)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	defer func() { _ = resp.Body.Close() }()
-	var out struct {
-		Databases []Database `json:"databases"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("decoding databases: %w", err)
-	}
-	return out.Databases, nil
+	return resp.Body.Close()
 }
 
 // GetDatabase resolves one database, including the default_connection_id that
@@ -288,8 +350,9 @@ func (c *Client) GetDatabase(ctx context.Context, id string) (DatabaseDetail, er
 	return out, nil
 }
 
-// InformationSchema lists tables for a connection; schema/table narrow the
-// listing and includeColumns adds column definitions with Arrow type names.
+// InformationSchema lists tables for a connection, following pages;
+// schema/table narrow the listing and includeColumns adds column definitions
+// with Arrow type names.
 func (c *Client) InformationSchema(ctx context.Context, connectionID, schema, table string, includeColumns bool) ([]Table, error) {
 	q := url.Values{"connection_id": {connectionID}}
 	if schema != "" {
@@ -301,18 +364,19 @@ func (c *Client) InformationSchema(ctx context.Context, connectionID, schema, ta
 	if includeColumns {
 		q.Set("include_columns", "true")
 	}
-	resp, err := c.do(ctx, http.MethodGet, "/v1/information_schema?"+q.Encode(), "", nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	var out struct {
-		Tables []Table `json:"tables"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("decoding information schema: %w", err)
-	}
-	return out.Tables, nil
+	var all []Table
+	err := c.listPages(ctx, "/v1/information_schema", q, func(r io.Reader) (page, error) {
+		var out struct {
+			page
+			Tables []Table `json:"tables"`
+		}
+		if err := json.NewDecoder(r).Decode(&out); err != nil {
+			return page{}, fmt.Errorf("decoding information schema: %w", err)
+		}
+		all = append(all, out.Tables...)
+		return out.page, nil
+	})
+	return all, err
 }
 
 func (c *Client) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
@@ -330,10 +394,14 @@ func (c *Client) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
 	return out.Workspaces, nil
 }
 
-// do issues one request with auth headers, retrying on 429 (honoring
+func (c *Client) do(ctx context.Context, method, path, databaseID string, body any) (*http.Response, error) {
+	return c.doAccept(ctx, method, path, databaseID, "", body)
+}
+
+// doAccept issues one request with auth headers, retrying on 429 (honoring
 // Retry-After, capped at 3 attempts). Non-2xx responses become errors with a
 // body snippet, since Hotdata error payloads carry stable codes worth showing.
-func (c *Client) do(ctx context.Context, method, path, databaseID string, body any) (*http.Response, error) {
+func (c *Client) doAccept(ctx context.Context, method, path, databaseID, accept string, body any) (*http.Response, error) {
 	var payload []byte
 	if body != nil {
 		var err error
@@ -358,6 +426,9 @@ func (c *Client) do(ctx context.Context, method, path, databaseID string, body a
 		}
 		if payload != nil {
 			req.Header.Set("Content-Type", "application/json")
+		}
+		if accept != "" {
+			req.Header.Set("Accept", accept)
 		}
 
 		resp, err := c.hc.Do(req)
@@ -422,5 +493,35 @@ type APIError struct {
 }
 
 func (e *APIError) Error() string {
-	return fmt.Sprintf("hotdata API: HTTP %d: %s", e.StatusCode, e.Body)
+	return fmt.Sprintf("hotdata API: HTTP %d: %s", e.StatusCode, e.message())
+}
+
+// message extracts the readable part of a Hotdata error body, which is one of
+// {"error":{"code","message"}}, {"error":"code"} or, for a failed result,
+// {"error_message":…}. Anything else is shown raw.
+func (e *APIError) message() string {
+	var b struct {
+		Error        json.RawMessage `json:"error"`
+		ErrorMessage string          `json:"error_message"`
+	}
+	if json.Unmarshal([]byte(e.Body), &b) == nil {
+		var detail struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(b.Error, &detail) == nil && detail.Message != "" {
+			if detail.Code != "" {
+				return detail.Message + " (" + detail.Code + ")"
+			}
+			return detail.Message
+		}
+		var code string
+		if json.Unmarshal(b.Error, &code) == nil && code != "" {
+			return code
+		}
+		if b.ErrorMessage != "" {
+			return b.ErrorMessage
+		}
+	}
+	return strings.TrimSpace(e.Body)
 }

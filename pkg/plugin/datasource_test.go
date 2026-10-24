@@ -76,8 +76,11 @@ func arrowFixture(t *testing.T) []byte {
 type serverOpts struct {
 	async           bool
 	pollsNeeded     int32
+	runFails        bool // the async run ends "failed" with an error_message
+	tooLarge        bool // POST answers 202 + X-Result-Id: result too large to inline
+	jsonOnly        bool // POST ignores the Arrow Accept header and answers JSON
 	rateLimit       bool
-	resultNotReady  int32         // fetches that return a JSON "processing" placeholder first
+	resultNotReady  int32         // fetches that return a 202 "processing" placeholder first
 	postUnavailable bool          // POST /v1/query answers 503 (never retryable: could re-run SQL)
 	postCount       *atomic.Int32 // when set, counts POST /v1/query requests
 }
@@ -124,12 +127,27 @@ func newContractServer(t *testing.T, opts serverOpts) (*httptest.Server, *atomic
 			_, _ = w.Write([]byte(`{"error":{"message":"async_after_ms must be at least 1000","code":"BAD_REQUEST"}}`))
 			return
 		}
+		if opts.tooLarge {
+			w.Header().Set("X-Result-Id", "rslt1")
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"query_run_id":"qrun1","status":"running","status_url":"/v1/query-runs/qrun1"}`))
+			return
+		}
 		if opts.async {
 			w.WriteHeader(http.StatusAccepted)
 			_, _ = w.Write([]byte(`{"query_run_id":"qrun1","status":"running","status_url":"/v1/query-runs/qrun1"}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"query_run_id":"qrun1","result_id":"rslt1","columns":["ts","n","f","s","b"],"rows":[],"row_count":2,"truncated":false,"execution_time_ms":2}`))
+		if opts.jsonOnly || r.Header.Get("Accept") != "application/vnd.apache.arrow.stream" {
+			_, _ = w.Write([]byte(`{"query_run_id":"qrun1","result_id":"rslt1","columns":["ts","n","f","s","b"],"rows":[],"preview_row_count":2,"total_row_count":2,"truncated":false,"execution_time_ms":2}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/vnd.apache.arrow.stream")
+		w.Header().Set("X-Query-Run-Id", "qrun1")
+		w.Header().Set("X-Result-Id", "rslt1")
+		w.Header().Set("X-Total-Row-Count", "2")
+		w.Header().Set("X-Execution-Time-Ms", "2")
+		_, _ = w.Write(arrowBody)
 	})
 	// Production contract: query-runs and results are database-scoped.
 	requireDB := func(w http.ResponseWriter, r *http.Request) bool {
@@ -148,6 +166,10 @@ func newContractServer(t *testing.T, opts serverOpts) (*httptest.Server, *atomic
 			_, _ = w.Write([]byte(`{"id":"qrun1","status":"running"}`))
 			return
 		}
+		if opts.runFails {
+			_, _ = w.Write([]byte(`{"id":"qrun1","status":"failed","error_message":"table 'default.public.t' not found"}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"id":"qrun1","status":"succeeded","result_id":"rslt1","row_count":2,"execution_time_ms":1500}`))
 	})
 	resultFetches := &atomic.Int32{}
@@ -159,18 +181,25 @@ func newContractServer(t *testing.T, opts serverOpts) (*httptest.Server, *atomic
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		// Model the fast-path race: the result is not materialized yet, so the
-		// endpoint answers 200 with a JSON placeholder before the Arrow stream.
+		// The result is not persisted yet: 202 with a JSON placeholder and
+		// Retry-After before the Arrow stream is served.
 		if resultFetches.Add(1) <= opts.resultNotReady {
 			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusAccepted)
 			_, _ = w.Write([]byte(`{"result_id":"rslt1","status":"processing"}`))
 			return
 		}
 		w.Header().Set("Content-Type", "application/vnd.apache.arrow.stream")
 		_, _ = w.Write(arrowBody)
 	})
+	// Listings are paginated: the first page points at a second via next_cursor.
 	mux.HandleFunc("GET /v1/databases", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"databases":[{"id":"dbid123","name":"test","default_catalog":"default","default_schema":"public"}]}`))
+		if r.URL.Query().Get("cursor") == "" {
+			_, _ = w.Write([]byte(`{"databases":[{"id":"dbid123","name":"test","default_catalog":"default","default_schema":"public"}],"count":1,"has_more":true,"next_cursor":"p2"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"databases":[{"id":"dbid456","name":"other","default_catalog":"default","default_schema":"main"}],"count":1,"has_more":false}`))
 	})
 	mux.HandleFunc("GET /v1/databases/dbid123", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"id":"dbid123","name":"test","default_connection_id":"conn123","default_catalog":"default","default_schema":"public"}`))
@@ -184,7 +213,15 @@ func newContractServer(t *testing.T, opts serverOpts) (*httptest.Server, *atomic
 		if r.URL.Query().Get("include_columns") == "true" {
 			cols = `,"columns":[{"name":"city","data_type":"Utf8View","nullable":true}]`
 		}
-		_, _ = w.Write([]byte(`{"tables":[{"schema":"cities","table":"global","synced":true` + cols + `}]}`))
+		if r.URL.Query().Get("table") == "" && r.URL.Query().Get("cursor") == "" {
+			_, _ = w.Write([]byte(`{"tables":[{"schema":"cities","table":"global","synced":true` + cols + `}],"count":1,"has_more":true,"next_cursor":"p2"}`))
+			return
+		}
+		if r.URL.Query().Get("cursor") == "p2" {
+			_, _ = w.Write([]byte(`{"tables":[{"schema":"sales","table":"orders","synced":true}],"count":1,"has_more":false}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"tables":[{"schema":"cities","table":"global","synced":true` + cols + `}],"count":1,"has_more":false}`))
 	})
 
 	srv := httptest.NewServer(mux)
@@ -310,15 +347,53 @@ func TestQueryDataRetriesOn429(t *testing.T) {
 	assertFixtureFrame(t, res)
 }
 
-// The fast/sync path can fetch the result before it is materialized; the
-// endpoint returns a JSON "processing" placeholder until the Arrow stream is
-// ready. The client must poll through it.
-func TestQueryDataResultNotReady(t *testing.T) {
-	srv, _ := newContractServer(t, serverOpts{resultNotReady: 2})
+// A server that answers JSON despite the Arrow Accept header falls back to
+// fetching the result, polling through 202 "processing" placeholders until
+// the Arrow stream is ready.
+func TestQueryDataJSONFallback(t *testing.T) {
+	srv, _ := newContractServer(t, serverOpts{jsonOnly: true, resultNotReady: 2})
 	ds := newTestDatasource(srv)
 
 	res := runQuery(t, ds, `{"rawSql":"SELECT * FROM t","format":"table"}`)
 	assertFixtureFrame(t, res)
+}
+
+// A result too large to inline answers 202 with X-Result-Id; the client reads
+// it from the Results API without polling the run.
+func TestQueryDataTooLarge(t *testing.T) {
+	srv, polls := newContractServer(t, serverOpts{tooLarge: true, resultNotReady: 1})
+	ds := newTestDatasource(srv)
+
+	res := runQuery(t, ds, `{"rawSql":"SELECT * FROM t","format":"table"}`)
+	assertFixtureFrame(t, res)
+	if polls.Load() != 0 {
+		t.Errorf("too-large flow should not poll the run, polled %d times", polls.Load())
+	}
+}
+
+// A failed async run surfaces the server's error_message.
+func TestQueryDataRunFailed(t *testing.T) {
+	srv, _ := newContractServer(t, serverOpts{async: true, runFails: true})
+	ds := newTestDatasource(srv)
+
+	res := runQuery(t, ds, `{"rawSql":"SELECT * FROM t","format":"table"}`)
+	if res.Error == nil || !strings.Contains(res.Error.Error(), "table 'default.public.t' not found") {
+		t.Fatalf("expected the run's error_message, got %v", res.Error)
+	}
+}
+
+func TestAPIErrorMessage(t *testing.T) {
+	for body, want := range map[string]string{
+		`{"error":{"code":"NOT_FOUND","message":"Result 'x' not found"}}`: "Result 'x' not found (NOT_FOUND)",
+		`{"error":"missing_authorization"}`:                               "missing_authorization",
+		`{"status":"failed","error_message":"out of memory"}`:             "out of memory",
+		`upstream timeout`: "upstream timeout",
+	} {
+		err := &hotdata.APIError{StatusCode: 400, Body: body}
+		if got := err.Error(); got != "hotdata API: HTTP 400: "+want {
+			t.Errorf("body %s: got %q, want message %q", body, got, want)
+		}
+	}
 }
 
 func TestQueryDataNoDatabase(t *testing.T) {
@@ -424,8 +499,23 @@ func TestResources(t *testing.T) {
 		if err := json.Unmarshal(rec.body, &tables); err != nil {
 			t.Fatal(err)
 		}
-		if len(tables) != 1 || tables[0].Schema != "cities" || tables[0].Table != "global" {
-			t.Fatalf("unexpected tables: %+v", tables)
+		if len(tables) != 2 || tables[0].Table != "global" || tables[1].Table != "orders" {
+			t.Fatalf("expected both pages of tables, got %+v", tables)
+		}
+	})
+
+	t.Run("databases", func(t *testing.T) {
+		rec := &resourceRecorder{}
+		err := ds.CallResource(context.Background(), &backend.CallResourceRequest{Path: "databases", URL: "databases"}, rec)
+		if err != nil || rec.status != 200 {
+			t.Fatalf("databases: err=%v status=%d body=%s", err, rec.status, rec.body)
+		}
+		var dbs []hotdata.Database
+		if err := json.Unmarshal(rec.body, &dbs); err != nil {
+			t.Fatal(err)
+		}
+		if len(dbs) != 2 || dbs[1].ID != "dbid456" {
+			t.Fatalf("expected both pages of databases, got %+v", dbs)
 		}
 	})
 
@@ -450,7 +540,7 @@ func TestResources(t *testing.T) {
 		if err != nil || rec.status != 200 {
 			t.Fatalf("schemas: err=%v status=%d body=%s", err, rec.status, rec.body)
 		}
-		if string(rec.body) != `["cities"]` {
+		if string(rec.body) != `["cities","sales"]` {
 			t.Fatalf("unexpected schemas: %s", rec.body)
 		}
 	})
