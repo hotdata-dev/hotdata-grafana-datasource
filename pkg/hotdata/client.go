@@ -214,9 +214,12 @@ func (c *Client) pollRun(ctx context.Context, runID, databaseID string) (RunMeta
 // is database-scoped. The caller must close the reader.
 //
 // A result that is still being persisted answers 202 with a JSON body
-// {"result_id":…,"status":"processing"} and a Retry-After header, so poll
-// until the response is an actual Arrow stream, backing off up to PollMax and
-// honoring ctx. A failed result answers 409, which surfaces as an APIError.
+// {"result_id":…,"status":"processing"}, so poll until the response is an
+// actual Arrow stream, backing off up to PollMax and honoring ctx. A failed
+// result answers 409, which surfaces as an APIError.
+//
+// The 202 carries Retry-After: 1, but persistence usually finishes ~100ms
+// later; honoring it added a full second to every result too large to inline.
 func (c *Client) FetchResultArrow(ctx context.Context, resultID, databaseID string) (io.ReadCloser, error) {
 	// Persistence of a just-minted result usually takes milliseconds, so start
 	// with a much shorter backoff than the run-poll cadence.
@@ -258,14 +261,10 @@ func (c *Client) FetchResultArrow(ctx context.Context, resultID, databaseID stri
 			return nil, fmt.Errorf("result not available (status %q): %s", st.Status, msg)
 		}
 
-		wait := retryAfterDelay(resp.Header.Get("Retry-After"), interval)
-		if wait > c.PollMax {
-			wait = c.PollMax
-		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(wait):
+		case <-time.After(interval):
 		}
 		if interval = interval * 3 / 2; interval > c.PollMax {
 			interval = c.PollMax

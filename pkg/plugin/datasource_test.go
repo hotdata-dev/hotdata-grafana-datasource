@@ -181,11 +181,12 @@ func newContractServer(t *testing.T, opts serverOpts) (*httptest.Server, *atomic
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		// The result is not persisted yet: 202 with a JSON placeholder and
-		// Retry-After before the Arrow stream is served.
+		// The result is not persisted yet: 202 with a JSON placeholder before
+		// the Arrow stream is served. Production sends Retry-After: 1, which
+		// the client deliberately ignores in favor of its faster backoff.
 		if resultFetches.Add(1) <= opts.resultNotReady {
 			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Retry-After", "0")
+			w.Header().Set("Retry-After", "1")
 			w.WriteHeader(http.StatusAccepted)
 			_, _ = w.Write([]byte(`{"result_id":"rslt1","status":"processing"}`))
 			return
