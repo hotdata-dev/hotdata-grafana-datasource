@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.0
 
 - Build backend binaries with Go 1.27.3, fixing GO-2026-6809 (crypto/x509 trusted compromised intermediate certificates), and update grafana-plugin-sdk-go to v0.297.0.
 - Force patched versions of dev/build dependencies flagged by npm audit: zod 4.6.7 (GHSA-mrhx-c7xc-m3w5), fast-uri 3.1.9 (GHSA-w74x-v6f9-j3xg and three others), ip-address 10.7.4 (GHSA-rxp7-6hxx-x8q5) and serialize-javascript 7.1.4 (GHSA-m5mm-p8h7-m29v).
