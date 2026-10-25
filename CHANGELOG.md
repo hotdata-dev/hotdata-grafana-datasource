@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Build backend binaries with Go 1.27.3, fixing GO-2026-6809 (crypto/x509 trusted compromised intermediate certificates), and update grafana-plugin-sdk-go to v0.297.0.
+- Force patched versions of dev/build dependencies flagged by npm audit: zod 4.6.7 (GHSA-mrhx-c7xc-m3w5), fast-uri 3.1.9 (GHSA-w74x-v6f9-j3xg and three others), ip-address 10.7.4 (GHSA-rxp7-6hxx-x8q5) and serialize-javascript 7.1.4 (GHSA-m5mm-p8h7-m29v). Update @grafana/plugin-e2e to 3.15.3.
 - Read query results as Arrow directly from `POST /v1/query`, so a fast query takes one request instead of two. Async and too-large results still come from the Results API.
 - Show the real error for failed queries: read `error_message` from query runs and failed results, and show the `message` and `code` from Hotdata error bodies instead of raw JSON.
 - The query editor's database picker searches by name on the server as you type (`GET /v1/databases?search=`), so any database in a large workspace can be found without loading them all. A saved database shows its name, not its id.
