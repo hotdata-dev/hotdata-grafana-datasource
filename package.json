@@ -21,7 +21,11 @@
     "moment": "^2.31.0",
     "basic-ftp": "^6.2.3",
     "source-map-js": "^1.2.2",
-    "micromatch": "npm:picomatch@^4.0.3"
+    "micromatch": "npm:picomatch@^4.0.3",
+    "zod": "^4.6.6",
+    "fast-uri": "^3.1.9",
+    "ip-address": "^10.7.4",
+    "serialize-javascript": "^7.1.3"
   },
   "devDependencies": {
     "@grafana/data": "13.1.8",
