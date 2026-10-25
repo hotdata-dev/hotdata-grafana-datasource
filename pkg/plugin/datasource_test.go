@@ -194,13 +194,20 @@ func newContractServer(t *testing.T, opts serverOpts) (*httptest.Server, *atomic
 		w.Header().Set("Content-Type", "application/vnd.apache.arrow.stream")
 		_, _ = w.Write(arrowBody)
 	})
-	// Listings are paginated: the first page points at a second via next_cursor.
+	// search is a case-insensitive name substring filter; limit sizes the page.
 	mux.HandleFunc("GET /v1/databases", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("cursor") == "" {
-			_, _ = w.Write([]byte(`{"databases":[{"id":"dbid123","name":"test","default_catalog":"default","default_schema":"public"}],"count":1,"has_more":true,"next_cursor":"p2"}`))
+		if r.URL.Query().Get("limit") == "" {
+			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		_, _ = w.Write([]byte(`{"databases":[{"id":"dbid456","name":"other","default_catalog":"default","default_schema":"main"}],"count":1,"has_more":false}`))
+		switch strings.ToLower(r.URL.Query().Get("search")) {
+		case "":
+			_, _ = w.Write([]byte(`{"databases":[{"id":"dbid123","name":"test","default_catalog":"default","default_schema":"public"},{"id":"dbid456","name":"other","default_catalog":"default","default_schema":"main"}],"count":2,"has_more":true,"next_cursor":"p2"}`))
+		case "oth":
+			_, _ = w.Write([]byte(`{"databases":[{"id":"dbid456","name":"other","default_catalog":"default","default_schema":"main"}],"count":1,"has_more":false}`))
+		default:
+			_, _ = w.Write([]byte(`{"databases":[],"count":0,"has_more":false}`))
+		}
 	})
 	mux.HandleFunc("GET /v1/databases/dbid123", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"id":"dbid123","name":"test","default_connection_id":"conn123","default_catalog":"default","default_schema":"public"}`))
@@ -505,18 +512,41 @@ func TestResources(t *testing.T) {
 		}
 	})
 
-	t.Run("databases", func(t *testing.T) {
+	databases := func(t *testing.T, url string) []hotdata.Database {
+		t.Helper()
 		rec := &resourceRecorder{}
-		err := ds.CallResource(context.Background(), &backend.CallResourceRequest{Path: "databases", URL: "databases"}, rec)
+		err := ds.CallResource(context.Background(), &backend.CallResourceRequest{Path: "databases", URL: url}, rec)
 		if err != nil || rec.status != 200 {
-			t.Fatalf("databases: err=%v status=%d body=%s", err, rec.status, rec.body)
+			t.Fatalf("%s: err=%v status=%d body=%s", url, err, rec.status, rec.body)
 		}
 		var dbs []hotdata.Database
 		if err := json.Unmarshal(rec.body, &dbs); err != nil {
 			t.Fatal(err)
 		}
-		if len(dbs) != 2 || dbs[1].ID != "dbid456" {
-			t.Fatalf("expected both pages of databases, got %+v", dbs)
+		return dbs
+	}
+
+	t.Run("databases", func(t *testing.T) {
+		if dbs := databases(t, "databases"); len(dbs) != 2 {
+			t.Fatalf("expected one page of 2 databases, got %+v", dbs)
+		}
+	})
+
+	t.Run("databases search", func(t *testing.T) {
+		if dbs := databases(t, "databases?search=Oth"); len(dbs) != 1 || dbs[0].ID != "dbid456" {
+			t.Fatalf("expected the matching database, got %+v", dbs)
+		}
+		// No match must encode as [], not null, for the frontend picker.
+		rec := &resourceRecorder{}
+		_ = ds.CallResource(context.Background(), &backend.CallResourceRequest{Path: "databases", URL: "databases?search=zzz"}, rec)
+		if string(rec.body) != "[]" {
+			t.Fatalf("expected [], got %s", rec.body)
+		}
+	})
+
+	t.Run("databases by id", func(t *testing.T) {
+		if dbs := databases(t, "databases?id=dbid123"); len(dbs) != 1 || dbs[0].Name != "test" {
+			t.Fatalf("expected database dbid123, got %+v", dbs)
 		}
 	})
 

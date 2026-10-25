@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { CodeEditor, Combobox, ComboboxOption, InlineField, InlineFieldRow, monacoTypes } from '@grafana/ui';
 import { QueryEditorProps } from '@grafana/data';
 import { DataSource } from '../datasource';
@@ -19,8 +19,16 @@ const DIALECTS: Array<ComboboxOption<Dialect>> = [
   { label: 'Snowflake', value: 'snowflake' },
 ];
 
+const toOption = (db: DatabaseResource): ComboboxOption<string> => ({
+  label: db.name || db.id,
+  description: db.id,
+  value: db.id,
+});
+
 export function QueryEditor({ datasource, query, onChange, onRunQuery }: Props) {
-  const [databases, setDatabases] = useState<Array<ComboboxOption<string>>>([]);
+  // Label for the selected database. Options load per search, so the saved id
+  // is resolved separately to show its name rather than the raw id.
+  const [selected, setSelected] = useState<ComboboxOption<string> | null>(null);
   const databaseIdRef = useRef(query.databaseId);
   const completionsRef = useRef<monacoTypes.IDisposable>();
 
@@ -30,22 +38,38 @@ export function QueryEditor({ datasource, query, onChange, onRunQuery }: Props) 
 
   useEffect(() => () => completionsRef.current?.dispose(), []);
 
+  // Workspaces can hold thousands of databases, so the picker searches by
+  // name on the server instead of loading them all.
+  const loadDatabases = useCallback(
+    (search: string) =>
+      datasource
+        .getResource<DatabaseResource[]>('databases', search ? { search } : undefined)
+        .then((dbs) => dbs.map(toOption))
+        // Picker degrades to free-text entry when discovery fails.
+        .catch(() => []),
+    [datasource]
+  );
+
   useEffect(() => {
+    const id = query.databaseId;
+    if (!id) {
+      return;
+    }
     let active = true;
     datasource
-      .getResource<DatabaseResource[]>('databases')
+      .getResource<DatabaseResource[]>('databases', { id })
       .then((dbs) => {
-        if (active) {
-          setDatabases(dbs.map((db) => ({ label: db.name, description: db.id, value: db.id })));
+        if (active && dbs[0]) {
+          setSelected(toOption(dbs[0]));
         }
       })
       .catch(() => {
-        // Picker degrades to free-text entry when discovery fails.
+        // Falls back to showing the raw id.
       });
     return () => {
       active = false;
     };
-  }, [datasource]);
+  }, [datasource, query.databaseId]);
 
   return (
     <>
@@ -61,9 +85,12 @@ export function QueryEditor({ datasource, query, onChange, onRunQuery }: Props) 
             isClearable
             createCustomValue
             placeholder="Datasource default"
-            options={databases}
-            value={query.databaseId ?? null}
-            onChange={(v) => onChange({ ...query, databaseId: v?.value })}
+            options={loadDatabases}
+            value={selected?.value === query.databaseId ? selected : (query.databaseId ?? null)}
+            onChange={(v) => {
+              setSelected(v);
+              onChange({ ...query, databaseId: v?.value });
+            }}
           />
         </InlineField>
         <InlineField label="Format" labelWidth={10}>

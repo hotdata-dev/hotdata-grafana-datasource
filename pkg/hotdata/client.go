@@ -307,21 +307,27 @@ func (c *Client) listPages(ctx context.Context, path string, q url.Values, decod
 	return nil
 }
 
-// ListDatabases returns every database in the workspace, following pages.
-func (c *Client) ListDatabases(ctx context.Context) ([]Database, error) {
-	var all []Database
-	err := c.listPages(ctx, "/v1/databases", url.Values{"limit": {"100"}}, func(r io.Reader) (page, error) {
-		var out struct {
-			page
-			Databases []Database `json:"databases"`
-		}
-		if err := json.NewDecoder(r).Decode(&out); err != nil {
-			return page{}, fmt.Errorf("decoding databases: %w", err)
-		}
-		all = append(all, out.Databases...)
-		return out.page, nil
-	})
-	return all, err
+// SearchDatabases returns one page of up to limit databases, newest first,
+// whose name contains search (case-insensitive; every database when empty).
+// Workspaces can hold thousands of databases, so pickers search on the
+// server rather than listing them all.
+func (c *Client) SearchDatabases(ctx context.Context, search string, limit int) ([]Database, error) {
+	q := url.Values{"limit": {strconv.Itoa(limit)}}
+	if search != "" {
+		q.Set("search", search)
+	}
+	resp, err := c.do(ctx, http.MethodGet, "/v1/databases?"+q.Encode(), "", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var out struct {
+		Databases []Database `json:"databases"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decoding databases: %w", err)
+	}
+	return out.Databases, nil
 }
 
 // Ping makes the cheapest workspace-scoped call, validating the API key and
