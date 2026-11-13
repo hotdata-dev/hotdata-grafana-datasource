@@ -19,7 +19,7 @@
     "dompurify": "^3.4.13",
     "js-cookie": "^3.0.7",
     "moment": "^2.31.0",
-    "basic-ftp": "^6.2.3",
+    "basic-ftp": "^6.2.6",
     "source-map-js": "^1.2.2",
     "micromatch": "npm:picomatch@^4.0.3",
     "zod": "^4.6.6",
